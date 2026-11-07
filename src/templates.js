@@ -3,11 +3,9 @@
 
 import { NUM_BANDS } from './audio.js';
 
-export const TEMPLATES = ['ring', 'wave', 'bars', 'radar', 'shake', 'warp'];
+export const TAU = Math.PI * 2;
 
-const TAU = Math.PI * 2;
-
-function rng(seed) {
+export function rng(seed) {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;
@@ -18,23 +16,30 @@ function rng(seed) {
   };
 }
 
-function hexToRgb(h) {
+export function hexToRgb(h) {
   const v = h.replace('#', '');
   const n = parseInt(v.length === 3 ? v.split('').map((c) => c + c).join('') : v, 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
-function mix(c1, c2, k) {
+export function mix(c1, c2, k) {
   const a = hexToRgb(c1), b = hexToRgb(c2);
   return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * k)).join(',')})`;
 }
-function rgba(c, a) {
+export function rgba(c, a) {
   const [r, g, b] = hexToRgb(c);
   return `rgba(${r},${g},${b},${a})`;
 }
 
 // cover-fit an image into a rect
-function drawCover(ctx, img, x, y, w, h, zoom = 1) {
-  const ir = img.width / img.height, r = w / h;
+export function mediaOf(o) {
+  if (o.bgType === 'video' && o.bgVideo && o.bgVideo.videoWidth) return o.bgVideo;
+  if (o.bgType === 'image' && o.bgImage) return o.bgImage;
+  return null;
+}
+
+export function drawCover(ctx, img, x, y, w, h, zoom = 1) {
+  const iw = img.videoWidth || img.width, ih = img.videoHeight || img.height;
+  const ir = iw / ih, r = w / h;
   let dw, dh;
   if (ir > r) { dh = h * zoom; dw = dh * ir; } else { dw = w * zoom; dh = dw / ir; }
   ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
@@ -43,14 +48,15 @@ function drawCover(ctx, img, x, y, w, h, zoom = 1) {
 // ---------------------------------------------------------------- background
 export function drawBackground(ctx, W, H, o, f, extra = {}) {
   ctx.save();
-  if (o.bgType === 'image' && o.bgImage) {
+  const media = mediaOf(o);
+  if (media) {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, H);
     const zoom = 1.04 + (extra.zoom || 0);
     ctx.save();
     if (extra.dx || extra.dy) ctx.translate(extra.dx || 0, extra.dy || 0);
     if (o.bgBlur > 0) ctx.filter = `blur(${o.bgBlur * Math.min(W, H) / 1080}px)`;
-    drawCover(ctx, o.bgImage, 0, 0, W, H, zoom);
+    drawCover(ctx, media, 0, 0, W, H, zoom);
     ctx.restore();
     ctx.fillStyle = `rgba(0,0,0,${o.bgDim})`;
     ctx.fillRect(0, 0, W, H);
@@ -74,7 +80,19 @@ export function drawOverlay(ctx, W, H, o, f, duration) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
   const portrait = H > W * 1.2;
-  const ty = portrait ? H * 0.82 : H * 0.88;
+  let ty = portrait ? H * 0.82 : H * 0.88;
+  if (o.textPos === 'top') ty = H * (portrait ? 0.12 : 0.14);
+  if (o.textPos === 'center') ty = H * 0.5;
+  if (o.showTimer) {
+    const sec = Math.max(0, f.t);
+    const txt = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+    ctx.save();
+    ctx.font = `600 ${Math.round(34 * u)}px "Segoe UI", "Inter", Arial, sans-serif`;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = rgba(o.textColor, 0.85);
+    ctx.fillText(txt, W - 44 * u, o.textPos === 'top' ? H - 44 * u : 70 * u);
+    ctx.restore();
+  }
   if (o.title) {
     ctx.font = `700 ${Math.round(o.titleSize * u)}px "Segoe UI", "Inter", Arial, sans-serif`;
     ctx.fillStyle = o.textColor;
@@ -110,7 +128,7 @@ export function drawOverlay(ctx, W, H, o, f, duration) {
 }
 
 // ---------------------------------------------------------------- particles from beats (deterministic)
-function beatParticles(ctx, W, H, o, f, cx, cy, r0, u, count = 26, life = 1.6) {
+export function beatParticles(ctx, W, H, o, f, cx, cy, r0, u, count = 26, life = 1.6) {
   const beats = f.beatsBetween(f.t - life, f.t);
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
@@ -132,7 +150,7 @@ function beatParticles(ctx, W, H, o, f, cx, cy, r0, u, count = 26, life = 1.6) {
 }
 
 // ================================================================ templates
-const draw = {};
+export const draw = {};
 
 // 1) Circular spectrum around a centre image / disc
 draw.ring = (ctx, W, H, o, f) => {
@@ -334,7 +352,8 @@ draw.shake = (ctx, W, H, o, f) => {
   const amp = 22 * u * d;
   const dx = amp * f.bassWave(0), dy = amp * f.bassWave(0.004);
   const zoom = 0.05 * f.bass * o.sens;
-  if (o.bgType === 'image' && o.bgImage) {
+  const media = mediaOf(o);
+  if (media) {
     drawBackground(ctx, W, H, o, f, { dx, dy, zoom });
     // RGB split on strong hits
     if (d > 0.35) {
@@ -342,7 +361,7 @@ draw.shake = (ctx, W, H, o, f) => {
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = Math.min(0.35, (d - 0.35) * 0.6);
       ctx.filter = 'hue-rotate(180deg)';
-      drawCover(ctx, o.bgImage, dx * 1.8, dy * -1.5, W, H, 1.04 + zoom);
+      drawCover(ctx, media, dx * 1.8, dy * -1.5, W, H, 1.04 + zoom);
       ctx.restore();
     }
   } else {
@@ -403,10 +422,3 @@ draw.warp = (ctx, W, H, o, f) => {
   beatParticles(ctx, W, H, o, f, cx, cy, 40 * u, u, 18, 1.0);
 };
 
-export function renderFrame(ctx, W, H, o, f, duration) {
-  ctx.save();
-  ctx.clearRect(0, 0, W, H);
-  (draw[o.template] || draw.ring)(ctx, W, H, o, f);
-  ctx.restore();
-  drawOverlay(ctx, W, H, o, f, duration);
-}

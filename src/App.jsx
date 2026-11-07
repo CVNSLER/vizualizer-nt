@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { STRINGS } from './i18n.js';
-import { TEMPLATES, renderFrame } from './templates.js';
+import { CATEGORIES, PALETTES, SHAPED, renderFrame } from './catalog.js';
 import { analyse, decodeFile, sample } from './audio.js';
 import { exportVideo, saveVideo } from './exporter.js';
 
@@ -13,6 +13,7 @@ const DEFAULTS = {
   color1: '#7c5cff', color2: '#22d3c5',
   title: '', subtitle: '', textColor: '#ffffff', titleSize: 64, showProgress: false,
   logoPos: 'tr', logoScale: 1, sens: 1,
+  showTimer: false, textPos: 'bottom', shapeSides: 6,
 };
 
 function dims(format, short) {
@@ -42,7 +43,7 @@ export default function App() {
   const T = STRINGS[lang];
   const [s, setS] = useState(loadSettings);
   const set = (k, v) => setS((p) => ({ ...p, [k]: v }));
-  const [images, setImages] = useState({ bgImage: null, centerImage: null, logo: null });
+  const [images, setImages] = useState({ bgImage: null, bgVideo: null, centerImage: null, logo: null });
   const [audio, setAudio] = useState(null); // { name, url, buffer, analysis }
   const [busy, setBusy] = useState(null);
   const [playing, setPlaying] = useState(false);
@@ -65,6 +66,14 @@ export default function App() {
     const loop = () => {
       const el = audioRef.current;
       const t = el ? el.currentTime : 0;
+      const v = options.bgType === 'video' ? options.bgVideo : null;
+      if (v && v.duration) {
+        const target = t % v.duration;
+        const running = el && !el.paused;
+        if (running && v.paused) v.play().catch(() => {});
+        if (!running && !v.paused) v.pause();
+        if (Math.abs(v.currentTime - target) > (running ? 0.3 : 0.04)) v.currentTime = target;
+      }
       if (audio?.analysis) {
         renderFrame(ctx, pw, ph, options, sample(audio.analysis, t), audio.analysis.duration);
       } else {
@@ -92,6 +101,16 @@ export default function App() {
       alert(`${T.error} ${e.message}`);
     }
     setBusy(null);
+  }
+
+  async function onVideo(file) {
+    if (!file) return;
+    const v = document.createElement('video');
+    v.muted = true; v.loop = true; v.playsInline = true; v.preload = 'auto';
+    v.src = URL.createObjectURL(file);
+    await new Promise((res, rej) => { v.onloadeddata = res; v.onerror = rej; });
+    setImages((p) => ({ ...p, bgVideo: v }));
+    set('bgType', 'video');
   }
 
   async function onImage(key, file) {
@@ -159,11 +178,23 @@ export default function App() {
         </Section>
 
         <Section title={T.template}>
-          <div className="tpl-grid">
-            {TEMPLATES.map((k) => (
-              <button key={k} className={`tpl ${s.template === k ? 'on' : ''}`} onClick={() => set('template', k)}>{T.tpl[k]}</button>
-            ))}
-          </div>
+          {CATEGORIES.map((c) => (
+            <div key={c.id} className="cat">
+              <div className="cat-name">{T.cat[c.id]}</div>
+              <div className="tpl-grid">
+                {c.items.map((k) => (
+                  <button key={k} className={`tpl ${s.template === k ? 'on' : ''}`} onClick={() => set('template', k)}>{T.tpl[k]}</button>
+                ))}
+              </div>
+            </div>
+          ))}
+          {SHAPED.includes(s.template) && (
+            <div className="seg" style={{ marginTop: 10 }}>
+              {[0, 3, 4, 6].map((n) => (
+                <button key={n} className={s.shapeSides === n ? 'on' : ''} onClick={() => set('shapeSides', n)}>{T.shapes[n]}</button>
+              ))}
+            </div>
+          )}
         </Section>
 
         <Section title={T.format}>
@@ -175,6 +206,12 @@ export default function App() {
         </Section>
 
         <Section title={T.colors}>
+          <div className="palettes" aria-label={T.palette}>
+            {PALETTES.map(([a, b]) => (
+              <button key={a + b} className="pal" style={{ background: `linear-gradient(135deg, ${a} 50%, ${b} 50%)` }}
+                onClick={() => setS((p) => ({ ...p, color1: a, color2: b }))} />
+            ))}
+          </div>
           <Color label={T.color1} value={s.color1} onChange={(v) => set('color1', v)} />
           <Color label={T.color2} value={s.color2} onChange={(v) => set('color2', v)} />
           <Range label={T.sensitivity} min={0.3} max={2} step={0.05} value={s.sens} onChange={(v) => set('sens', v)} />
@@ -182,21 +219,31 @@ export default function App() {
 
         <Section title={T.background}>
           <div className="seg">
-            {[['gradient', T.bgGradient], ['color', T.bgColor], ['image', T.bgImage]].map(([k, l]) => (
+            {[['gradient', T.bgGradient], ['color', T.bgColor], ['image', T.bgImage], ['video', T.bgVideo]].map(([k, l]) => (
               <button key={k} className={s.bgType === k ? 'on' : ''} onClick={() => set('bgType', k)}>{l}</button>
             ))}
           </div>
-          {s.bgType !== 'image' && <Color label={T.bgColor1} value={s.bgColor1} onChange={(v) => set('bgColor1', v)} />}
+          {(s.bgType === 'gradient' || s.bgType === 'color') && <Color label={T.bgColor1} value={s.bgColor1} onChange={(v) => set('bgColor1', v)} />}
           {s.bgType === 'gradient' && <Color label={T.bgColor2} value={s.bgColor2} onChange={(v) => set('bgColor2', v)} />}
-          {s.bgType === 'image' && (
+          {s.bgType === 'video' && (
+            <div className="imgpick">
+              <label className="btn">
+                <input type="file" accept="video/*" hidden onChange={(e) => onVideo(e.target.files[0])} />
+                {T.chooseVideo}
+              </label>
+              {images.bgVideo && <button onClick={() => { images.bgVideo.pause(); setImages((p) => ({ ...p, bgVideo: null })); }}>{T.remove}</button>}
+            </div>
+          )}
+          {(s.bgType === 'image' || s.bgType === 'video') && (
             <>
-              <ImagePick label={T.chooseImage} img={images.bgImage} T={T} onPick={(f) => onImage('bgImage', f)} onClear={() => setImages((p) => ({ ...p, bgImage: null }))} />
+              {s.bgType === 'image' && <ImagePick label={T.chooseImage} img={images.bgImage} T={T} onPick={(f) => onImage('bgImage', f)} onClear={() => setImages((p) => ({ ...p, bgImage: null }))} />}
               <Range label={T.dim} min={0} max={0.9} step={0.05} value={s.bgDim} onChange={(v) => set('bgDim', v)} />
               <Range label={T.blur} min={0} max={30} step={1} value={s.bgBlur} onChange={(v) => set('bgBlur', v)} />
             </>
           )}
-          {(s.template === 'ring' || s.template === 'shake') && (
-            <ImagePick label={T.centerImage} img={images.centerImage} T={T} onPick={(f) => onImage('centerImage', f)} onClear={() => setImages((p) => ({ ...p, centerImage: null }))} />
+          <div className="sub">{T.cover}</div>
+          {(
+            <ImagePick label={T.chooseImage} img={images.centerImage} T={T} onPick={(f) => onImage('centerImage', f)} onClear={() => setImages((p) => ({ ...p, centerImage: null }))} />
           )}
         </Section>
 
@@ -205,6 +252,12 @@ export default function App() {
           <input className="txt" placeholder={T.subtitle} value={s.subtitle} onChange={(e) => set('subtitle', e.target.value)} />
           <Color label={T.textColor} value={s.textColor} onChange={(v) => set('textColor', v)} />
           <Range label={T.textSize} min={30} max={120} step={1} value={s.titleSize} onChange={(v) => set('titleSize', v)} />
+          <div className="seg">
+            {[['bottom', T.posBottom], ['center', T.posCenter], ['top', T.posTop]].map(([k, l]) => (
+              <button key={k} className={s.textPos === k ? 'on' : ''} onClick={() => set('textPos', k)}>{l}</button>
+            ))}
+          </div>
+          <label className="check"><input type="checkbox" checked={s.showTimer} onChange={(e) => set('showTimer', e.target.checked)} /> {T.showTimer}</label>
           <label className="check"><input type="checkbox" checked={s.showProgress} onChange={(e) => set('showProgress', e.target.checked)} /> {T.showProgress}</label>
         </Section>
 
@@ -224,7 +277,7 @@ export default function App() {
       </aside>
 
       <main className="stage">
-        <div className="canvas-wrap" style={{ aspectRatio: `${pw} / ${ph}` }}>
+        <div className="canvas-wrap" style={{ aspectRatio: `${pw} / ${ph}`, width: `min(100%, calc((100vh - 110px) * ${pw / ph}))` }}>
           <canvas ref={canvasRef} width={pw} height={ph} />
           {busy && <div className="busy"><div className="spinner" />{busy}</div>}
         </div>
@@ -294,7 +347,8 @@ function idleFeatures(t) {
   const bands = new Float32Array(64).map((_, i) => 0.25 + 0.2 * Math.sin(t * 2 + i * 0.3) * Math.exp(-i / 50));
   return {
     t, bands, raw: bands, bass: 0.3 + 0.2 * Math.sin(t * 3), bassRaw: 0.3, mid: 0.3, high: 0.2, rms: 0.3, flux: 0,
-    lastBeat: null, sinceBeat: 99, bpm: 120, bassWave: () => 0, beatsBetween: () => [], wave: () => 0,
+    lastBeat: null, sinceBeat: 99, bpm: 120, bassWave: () => 0, beatsBetween: () => [], wave: (dt) => 0.3 * Math.sin((t + dt) * 40),
+    bandsAt: () => bands, bassAt: () => 0.3, duration: 0,
   };
 }
 

@@ -221,5 +221,12 @@ export function sample(an, t) {
     bassWave: bw,
     beatsBetween: (t0, t1) => an.beats.filter((b) => b.t > t0 && b.t <= t1),
     wave: (dt) => an.wave[Math.max(0, Math.min(an.wave.length - 1, Math.floor((t + dt) * 600)))],
+    // smoothed spectrum `dt` seconds ago (for history-based visuals)
+    bandsAt: (dt) => {
+      const j = Math.max(0, Math.min(an.frames - 1, fi - Math.round(dt * ANALYSIS_FPS)));
+      return an.bandsS.subarray(j * NUM_BANDS, j * NUM_BANDS + NUM_BANDS);
+    },
+    bassAt: (dt) => an.bassS[Math.max(0, Math.min(an.frames - 1, fi - Math.round(dt * ANALYSIS_FPS)))],
+    duration: an.duration,
   };
 }

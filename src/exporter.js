@@ -1,7 +1,17 @@
 // Video export with WebCodecs + mp4-muxer (no ffmpeg needed).
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 import { sample } from './audio.js';
-import { renderFrame } from './templates.js';
+import { renderFrame } from './catalog.js';
+
+function seekVideo(v, t) {
+  if (Math.abs(v.currentTime - t) < 0.001) return Promise.resolve();
+  return new Promise((res) => {
+    const done = () => { v.removeEventListener('seeked', done); res(); };
+    v.addEventListener('seeked', done);
+    v.currentTime = t;
+    setTimeout(done, 2000);
+  });
+}
 
 async function pickVideoConfig(width, height, fps) {
   const bitrate = Math.round(width * height * fps * 0.12);
@@ -116,10 +126,14 @@ export async function exportVideo({ width, height, fps, start, end, options, ana
   const ctx = canvas.getContext('2d', { alpha: false });
   const n = Math.round((end - start) * fps);
   const duration = analysis.duration;
+  options.bgVideo?.pause();
   for (let i = 0; i < n; i++) {
     if (signal?.aborted) { venc.close(); throw new Error('ABORTED'); }
     if (failure) throw failure;
     const t = start + i / fps;
+    if (options.bgType === 'video' && options.bgVideo && options.bgVideo.duration) {
+      await seekVideo(options.bgVideo, t % options.bgVideo.duration);
+    }
     renderFrame(ctx, width, height, options, sample(analysis, t), duration);
     const frame = new VideoFrame(canvas, { timestamp: Math.round((i / fps) * 1e6), duration: Math.round(1e6 / fps) });
     venc.encode(frame, { keyFrame: i % (fps * 2) === 0 });
