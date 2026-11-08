@@ -49,6 +49,7 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [exp, setExp] = useState(null); // export dialog state
+  const [notice, setNotice] = useState(null);
   const canvasRef = useRef(null);
   const audioRef = useRef(null);
   const abortRef = useRef(null);
@@ -88,6 +89,7 @@ export default function App() {
 
   async function onAudioFile(file) {
     if (!file) return;
+    setNotice(null);
     audioRef.current?.pause();
     setPlaying(false);
     setBusy(T.analysing);
@@ -98,7 +100,7 @@ export default function App() {
       const url = URL.createObjectURL(file);
       setAudio({ name: file.name, url, buffer, analysis });
     } catch (e) {
-      alert(`${T.error} ${e.message}`);
+      setNotice(`${T.error} ${e.message}`);
     }
     setBusy(null);
   }
@@ -127,7 +129,7 @@ export default function App() {
   }
 
   function openExport() {
-    if (!audio) { alert(T.noAudio); return; }
+    if (!audio) { setNotice(T.noAudio); return; }
     audioRef.current?.pause(); setPlaying(false);
     setExp({ quality: '1080p', fps: 30, whole: true, from: 0, to: Math.min(60, Math.floor(audio.analysis.duration)), progress: null, result: null, error: null });
   }
@@ -277,9 +279,10 @@ export default function App() {
       </aside>
 
       <main className="stage">
-        <div className="canvas-wrap" style={{ aspectRatio: `${pw} / ${ph}`, width: `min(100%, calc((100vh - 110px) * ${pw / ph}))` }}>
+        <div className="canvas-wrap" style={{ aspectRatio: `${pw} / ${ph}`, width: `min(100%, calc((100vh - 110px) * ${pw / ph}))`, '--ar': pw / ph }}>
           <canvas ref={canvasRef} width={pw} height={ph} />
           {busy && <div className="busy"><div className="spinner" />{busy}</div>}
+          {notice && <button className="notice" onClick={() => setNotice(null)}>{notice}</button>}
         </div>
         <div className="transport">
           <button className="play" onClick={togglePlay} disabled={!audio} aria-label={playing ? T.pause : T.play}>{playing ? '❚❚' : '▶'}</button>

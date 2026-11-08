@@ -161,6 +161,17 @@ export async function saveVideo(data, name, title) {
     await window.desktop.finishSave(true);
     return path;
   }
+  // inside a claude.ai artifact: the platform's download capability
+  const dl = window.claude?.use ? await window.claude.use('downloads').catch(() => null) : null;
+  if (dl) {
+    try {
+      await dl.save({ filename: name, data: new Blob([data], { type: 'video/mp4' }) });
+      return name;
+    } catch (e) {
+      if (e?.code === 'declined') return null;
+      throw new Error(e?.message || String(e?.code || e));
+    }
+  }
   const url = URL.createObjectURL(new Blob([data], { type: 'video/mp4' }));
   const el = document.createElement('a');
   el.href = url; el.download = name; el.click();
