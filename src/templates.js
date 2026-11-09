@@ -28,8 +28,10 @@ export function mix(c1, c2, k) {
   return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * k)).join(',')})`;
 }
 export function rgba(c, a) {
-  const [r, g, b] = hexToRgb(c);
-  return `rgba(${r},${g},${b},${a})`;
+  const [r, g, b] = hexToRgb(c || '#ffffff');
+  // never hand the canvas an invalid colour (NaN / Infinity alpha)
+  const al = Number.isFinite(a) ? Math.max(0, Math.min(1, a)) : 0;
+  return `rgba(${r},${g},${b},${al})`;
 }
 
 // cover-fit an image into a rect

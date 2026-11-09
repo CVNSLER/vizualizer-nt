@@ -119,6 +119,10 @@ function anchor(pos, W, H) {
   }[pos] || [W / 2, H / 2];
 }
 function valueOf(f, sound) {
+  const v = rawValue(f, sound);
+  return Number.isFinite(v) ? v : 0;
+}
+function rawValue(f, sound) {
   switch (sound) {
     case 'kick': return f.kick;
     case 'snare': return f.snare;
@@ -132,7 +136,7 @@ function valueOf(f, sound) {
 const BAND_RANGE = { kick: [0, 0.18], bass: [0, 0.25], snare: [0.3, 0.6], vocal: [0.35, 0.7], hat: [0.75, 1], ohat: [0.7, 1] };
 
 function drawLayer(ctx, W, H, o, f, L, u, autoCol) {
-  const v = Math.min(1.4, valueOf(f, L.sound) * L.amount * o.sens);
+  const v = Math.min(1.4, valueOf(f, L.sound) * (L.amount ?? 1) * (o.sens ?? 1));
   const [cx, cy] = anchor(L.pos, W, H);
   const full = L.pos === 'full';
   const size = Math.min(W, H);
@@ -267,7 +271,7 @@ draw.one = (ctx, W, H, o, f) => {
   let zoom = 1, dx = 0, dy = 0;
   for (const L of layers) {
     if (!L.on) continue;
-    const v = Math.min(1.4, valueOf(f, L.sound) * L.amount * o.sens);
+    const v = Math.min(1.4, valueOf(f, L.sound) * (L.amount ?? 1) * (o.sens ?? 1));
     if (L.effect === 'zoom') zoom += 0.06 * v;
     if (L.effect === 'shake') { const a = 18 * u * v; dx += a * f.bassWave(0); dy += a * f.bassWave(0.004); }
   }

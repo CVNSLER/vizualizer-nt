@@ -97,10 +97,11 @@ export default function App() {
         if (!running && !v.paused) v.pause();
         if (Math.abs(v.currentTime - target) > (running ? 0.3 : 0.04)) v.currentTime = target;
       }
-      if (audio?.analysis) {
-        renderFrame(ctx, pw, ph, options, sample(audio.analysis, t), audio.analysis.duration);
-      } else {
-        renderFrame(ctx, pw, ph, options, idleFeatures(performance.now() / 1000), 0);
+      try {
+        if (audio?.analysis) renderFrame(ctx, pw, ph, options, sample(audio.analysis, t), audio.analysis.duration);
+        else renderFrame(ctx, pw, ph, options, idleFeatures(performance.now() / 1000), 0);
+      } catch (err) {
+        if (!loop.warned) { loop.warned = true; console.error('render', err); }
       }
       setTime(t);
       raf = requestAnimationFrame(loop);
@@ -569,6 +570,9 @@ function idleFeatures(t) {
     t, bands, raw: bands, bass: 0.3 + 0.2 * Math.sin(t * 3), bassRaw: 0.3, mid: 0.3, high: 0.2, rms: 0.3, flux: 0,
     lastBeat: null, sinceBeat: 99, bpm: 120, bassWave: () => 0, beatsBetween: () => [], wave: (dt) => 0.3 * Math.sin((t + dt) * 40),
     bandsAt: () => bands, bassAt: () => 0.3, duration: 0,
+    deep: false, section: null, recent: () => [],
+    kick: Math.max(0, Math.sin(t * 4)) ** 8, snare: Math.max(0, Math.sin(t * 4 + 1.6)) ** 8, hat: 0.3, hatc: 0.3, ohat: 0,
+    vocal: 0.3 + 0.2 * Math.sin(t * 0.7), sfx: 0, bassLine: 0.4 + 0.2 * Math.sin(t * 2),
   };
 }
 
