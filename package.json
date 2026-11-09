@@ -15,6 +15,7 @@
     "check": "node scripts/check-features.mjs"
   },
   "dependencies": {
+    "demucs-web": "1.0.2",
     "mp4-muxer": "5.2.2"
   },
   "devDependencies": {
