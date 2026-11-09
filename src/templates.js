@@ -3,6 +3,7 @@
 
 import { NUM_BANDS } from './audio.js';
 import { fontStack } from './fonts.js';
+import { applyBgFx, beatPulse } from './videofx.js';
 
 export const TAU = Math.PI * 2;
 
@@ -118,6 +119,7 @@ export function drawBackground(ctx, W, H, o, f, extra = {}) {
     let zoom = 1.04 + (extra.zoom || 0);
     if (o.bgMotion === 'zoom') zoom += 0.12 * (0.5 - 0.5 * Math.cos((f.t / 24) * Math.PI * 2));
     if (o.bgMotion === 'pulse') zoom += 0.07 * f.bass * o.sens;
+    if (o.fxPunch > 0) zoom += 0.12 * o.fxPunch * beatPulse(f);
     const blur = o.bgBlur > 0 ? `blur(${o.bgBlur * Math.min(W, H) / 1080}px)` : 'none';
     ctx.save();
     if (extra.dx || extra.dy) ctx.translate(extra.dx || 0, extra.dy || 0);
@@ -138,6 +140,7 @@ export function drawBackground(ctx, W, H, o, f, extra = {}) {
     ctx.restore();
     ctx.fillStyle = `rgba(0,0,0,${o.bgDim})`;
     ctx.fillRect(0, 0, W, H);
+    applyBgFx(ctx, W, H, o, f);
   } else if (o.bgType === 'color') {
     ctx.fillStyle = o.bgColor1;
     ctx.fillRect(0, 0, W, H);

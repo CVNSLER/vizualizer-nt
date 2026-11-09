@@ -2,6 +2,7 @@
 import { Muxer, ArrayBufferTarget, StreamTarget } from 'mp4-muxer';
 import { sample } from './audio.js';
 import { renderFrame } from './catalog.js';
+import { videoTimeAt } from './videofx.js';
 
 function seekVideo(v, t) {
   if (Math.abs(v.currentTime - t) < 0.001) return Promise.resolve();
@@ -140,7 +141,7 @@ export async function exportVideo({ width, height, fps, start, end, options, ana
     if (failure) throw failure;
     const t = start + i / fps;
     if (options.bgType === 'video' && options.bgVideo && options.bgVideo.duration) {
-      await seekVideo(options.bgVideo, t % options.bgVideo.duration);
+      await seekVideo(options.bgVideo, videoTimeAt(analysis, options, t, options.bgVideo.duration));
     }
     renderFrame(ctx, width, height, options, sample(analysis, t), duration);
     const frame = new VideoFrame(canvas, { timestamp: Math.round((i / fps) * 1e6), duration: Math.round(1e6 / fps) });

@@ -4,6 +4,7 @@ import { CATEGORIES, PALETTES, SHAPED, renderFrame } from './catalog.js';
 import { analyse, decodeFile, sample } from './audio.js';
 import { exportVideo, saveVideo } from './exporter.js';
 import { FONTS, loadFont, previewFont } from './fonts.js';
+import { FX_PRESETS, FX_KEYS, videoTimeAt, videoRateAt } from './videofx.js';
 
 const FORMATS = { '9:16': [9, 16], '1:1': [1, 1], '4:5': [4, 5], '16:9': [16, 9] };
 const QUALITIES = { '720p': 720, '1080p': 1080, '4K': 2160 };
@@ -16,6 +17,7 @@ const DEFAULTS = {
   logoPos: 'tr', logoScale: 1, sens: 1,
   showTimer: false, textPos: 'bottom', shapeSides: 6,
   titleFont: 'Montserrat', subFont: 'Montserrat', titleWeight: 700, bgFit: 'cover', bgMotion: 'none',
+  fxPreset: 'none', ...FX_PRESETS.none,
 };
 
 function dims(format, short) {
@@ -73,8 +75,11 @@ export default function App() {
       const t = el ? el.currentTime : 0;
       const v = options.bgType === 'video' ? options.bgVideo : null;
       if (v && v.duration) {
-        const target = t % v.duration;
+        const an = audio?.analysis;
+        const target = videoTimeAt(an, options, t, v.duration);
         const running = el && !el.paused;
+        const rate = Math.max(0.25, Math.min(4, videoRateAt(an, options, t)));
+        if (Math.abs(v.playbackRate - rate) > 0.04) v.playbackRate = rate;
         if (running && v.paused) v.play().catch(() => {});
         if (!running && !v.paused) v.pause();
         if (Math.abs(v.currentTime - target) > (running ? 0.3 : 0.04)) v.currentTime = target;
@@ -267,6 +272,27 @@ export default function App() {
               </label>
               <Range label={T.dim} min={0} max={0.9} step={0.05} value={s.bgDim} onChange={(v) => set('bgDim', v)} />
               <Range label={T.blur} min={0} max={30} step={1} value={s.bgBlur} onChange={(v) => set('bgBlur', v)} />
+              <div className="fx">
+                <div className="sub">{T.fxTitle}</div>
+                <div className="chips">
+                  {Object.keys(FX_PRESETS).map((k) => (
+                    <button key={k} className={s.fxPreset === k ? 'on' : ''}
+                      onClick={() => setS((p) => ({ ...p, ...FX_PRESETS[k], fxPreset: k }))}>{T.fxPresets[k]}</button>
+                  ))}
+                </div>
+                {s.bgType === 'video' && (
+                  <label className="row">{T.fxCut}
+                    <select id="fx-cut" value={s.fxCut} onChange={(e) => setS((p) => ({ ...p, fxCut: +e.target.value, fxPreset: 'custom' }))}>
+                      {[0, 2, 4, 8, 16].map((n) => <option key={n} value={n}>{n ? T.fxCutEvery(n) : T.off}</option>)}
+                    </select>
+                  </label>
+                )}
+                {s.bgType === 'video' && <FxRange label={T.fxSpeed} k="fxSpeed" s={s} setS={setS} />}
+                <FxRange label={T.fxPunch} k="fxPunch" s={s} setS={setS} />
+                <FxRange label={T.fxDuotone} k="fxDuotone" s={s} setS={setS} />
+                <FxRange label={T.fxGlitch} k="fxGlitch" s={s} setS={setS} />
+                <FxRange label={T.fxVhs} k="fxVhs" s={s} setS={setS} />
+              </div>
             </>
           )}
           <div className="sub">{T.cover}</div>
@@ -476,4 +502,8 @@ function FontPicker({ id, label, value, onChange, T, sample }) {
       )}
     </div>
   );
+}
+
+function FxRange({ label, k, s, setS }) {
+  return <Range label={label} min={0} max={1} step={0.05} value={s[k]} onChange={(v) => setS((p) => ({ ...p, [k]: v, fxPreset: 'custom' }))} />;
 }

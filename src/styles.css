@@ -100,3 +100,5 @@ input.txt { width: 100%; margin-bottom: 8px; }
 .font-item:hover, .font-item.on { background: rgba(124, 92, 255, .15); border-color: var(--line); }
 .more { margin-top: 6px; }
 .font-sample { margin-top: 10px; font-size: 24px; padding: 8px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+
+.fx { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 6px; }
