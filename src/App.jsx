@@ -8,7 +8,8 @@ import { FX_PRESETS, FX_KEYS, videoTimeAt, videoRateAt } from './videofx.js';
 import { runDeepAnalysis } from './deep/index.js';
 import AlgoPanel from './AlgoPanel.jsx';
 import OnePanel, { LayerEditor } from './OnePanel.jsx';
-import { autoLayers } from './one.js';
+import { autoLayers, MOODS, detectMood } from './one.js';
+import { wavBytes, mp3Bytes, saveAudio } from './audioexport.js';
 import { checkQuality, improveQuality, toWavUrl } from './quality/index.js';
 
 const FORMATS = { '9:16': [9, 16], '1:1': [1, 1], '4:5': [4, 5], '16:9': [16, 9] };
@@ -203,10 +204,26 @@ export default function App() {
     }
     setUseEnhancedRaw(v);
   }
+  async function saveMusic(fmt) {
+    const buf = exp.musicEnh && quality.enhanced ? quality.enhanced.buffer : audio.buffer;
+    const start = exp.whole ? 0 : Math.max(0, +exp.from);
+    const end = exp.whole ? buf.duration : Math.min(buf.duration, Math.max(start + 1, +exp.to));
+    const base = audio.name.replace(/\.[^.]+$/, '') + (exp.musicEnh && quality.enhanced ? '_yaxshilangan' : '');
+    try {
+      setExp((x) => ({ ...x, musicBusy: T.preparing, musicDone: null, error: null }));
+      const bytes = fmt === 'wav' ? wavBytes(buf, start, end)
+        : await mp3Bytes(buf, start, end, 320, (p) => setExp((x) => x && ({ ...x, musicBusy: `${T.preparing} ${Math.round(p * 100)}%` })));
+      const saved = await saveAudio(bytes, `${base}.${fmt}`, T.saveAs);
+      setExp((x) => x && ({ ...x, musicBusy: null, musicDone: saved }));
+    } catch (e) {
+      setExp((x) => x && ({ ...x, musicBusy: null, error: String(e.message || e) }));
+    }
+  }
+
   function buildOne(variant = false) {
     const seed = variant ? (s.oneSeed || 1) + 1 : (s.oneSeed || 1);
-    const layers = autoLayers(audio?.analysis?.deep || null, options, seed);
-    setS((p) => ({ ...p, template: 'one', layers, oneSeed: seed }));
+    const { layers, mood } = autoLayers(audio?.analysis?.deep || null, options, seed, s.oneMoodPick && s.oneMoodPick !== 'auto' ? s.oneMoodPick : null);
+    setS((p) => ({ ...p, template: 'one', layers, oneSeed: seed, oneMood: mood }));
   }
 
   const togglePlayRef = useRef(null);
@@ -311,6 +328,7 @@ export default function App() {
                 <button className="primary" onClick={buildOne} disabled={!audio}>{T.buildNow}</button>
                 <button onClick={() => buildOne(true)} disabled={!s.layers?.length}>{T.variant}</button>
               </div>
+              {s.oneMood && <p className="hint">{T.moodLabel}: <b>{T.moodNames[s.oneMood]}</b> · {audio?.analysis?.deep?.bpm ?? '—'} BPM</p>}
               <LayerEditor T={T} layers={s.layers} onChange={(layers) => set('layers', layers)} />
             </div>
           )}
@@ -463,7 +481,7 @@ export default function App() {
           <span className="time">{fmtTime(dur)}</span>
           <button className="primary" onClick={openExport}>{T.export}</button>
         </div>
-        {audio && <audio ref={audioRef} src={useEnhanced && quality.enhanced ? quality.enhanced.url : audio.url} onEnded={() => setPlaying(false)} />}
+        {audio && <audio ref={audioRef} loop src={useEnhanced && quality.enhanced ? quality.enhanced.url : audio.url} />}
       </main>
 
       {oneOpen && (
@@ -471,6 +489,8 @@ export default function App() {
           onCheck={runQualityCheck} onImprove={runImprove} target={qTarget} setTarget={setQTarget}
           useEnhanced={useEnhanced} setUseEnhanced={setUseEnhanced}
           onBuild={() => buildOne()} onVariant={() => buildOne(true)} layers={s.layers} setLayers={(layers) => set('layers', layers)}
+          mood={s.oneMood} detected={audio?.analysis?.deep ? detectMood(audio.analysis.deep) : null} moodPick={s.oneMoodPick || 'auto'}
+          setMoodPick={(v) => set('oneMoodPick', v)} moods={MOODS}
           onClose={() => setOneOpen(false)} />
       )}
       {algoOpen && (
@@ -503,6 +523,22 @@ export default function App() {
                 <div className="actions">
                   <button onClick={() => setExp(null)}>{T.close}</button>
                   <button className="primary" onClick={startExport}>{T.start}</button>
+                </div>
+                <div className="music-dl">
+                  <div className="sub">{T.musicOnly}</div>
+                  {quality.enhanced && (
+                    <div className="seg">
+                      <button className={!exp.musicEnh ? 'on' : ''} onClick={() => setExp({ ...exp, musicEnh: false })}>{T.original}</button>
+                      <button className={exp.musicEnh ? 'on' : ''} onClick={() => setExp({ ...exp, musicEnh: true })}>{T.enhanced}</button>
+                    </div>
+                  )}
+                  <div className="q-actions">
+                    <button onClick={() => saveMusic('mp3')} disabled={!!exp.musicBusy}>MP3 · 320 kbps</button>
+                    <button onClick={() => saveMusic('wav')} disabled={!!exp.musicBusy}>WAV · 16-bit</button>
+                    {exp.musicBusy && <span className="hint">{exp.musicBusy}</span>}
+                  </div>
+                  {exp.musicDone && <p className="ok">{T.done}<br /><code>{exp.musicDone}</code></p>}
+                  {!window.desktop && <p className="hint">{T.musicZipNote}</p>}
                 </div>
               </>
             )}

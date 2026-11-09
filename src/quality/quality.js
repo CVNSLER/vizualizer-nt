@@ -20,6 +20,7 @@ function coeffs(type, fs, f0, q = 0.7071, gainDb = 0) {
   let b0, b1, b2, a0, a1, a2;
   if (type === 'hp') { b0 = (1 + c) / 2; b1 = -(1 + c); b2 = (1 + c) / 2; a0 = 1 + al; a1 = -2 * c; a2 = 1 - al; }
   else if (type === 'lp') { b0 = (1 - c) / 2; b1 = 1 - c; b2 = (1 - c) / 2; a0 = 1 + al; a1 = -2 * c; a2 = 1 - al; }
+  else if (type === 'ap') { b0 = 1 - al; b1 = -2 * c; b2 = 1 + al; a0 = 1 + al; a1 = -2 * c; a2 = 1 - al; }
   else if (type === 'bp') { b0 = al; b1 = 0; b2 = -al; a0 = 1 + al; a1 = -2 * c; a2 = 1 - al; }
   else if (type === 'peak') { b0 = 1 + al * A; b1 = -2 * c; b2 = 1 - al * A; a0 = 1 + al / A; a1 = -2 * c; a2 = 1 - al / A; }
   else if (type === 'hshelf') {
@@ -147,6 +148,20 @@ function fftMag(re, im) {
     }
   }
 }
+// octave-band centres and a reference "modern commercial mix" long-term balance (dB vs 1 kHz)
+const OCT = [31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+const OCT_REF = [2, 5, 4.5, 1.5, 0, 0, -2, -4.5, -8, -14];
+const OCT_W = [0.4, 0.8, 1, 1, 1, 1, 1, 1, 0.8, 0.4];
+function tonal(oct) {
+  // deviation from the reference after removing the overall level (fit on 250 Hz - 4 kHz)
+  const dev = oct.map((v, i) => v - OCT_REF[i]);
+  const off = (dev[3] + dev[4] + dev[5] + dev[6] + dev[7]) / 5;
+  const d = dev.map((v) => v - off);
+  let e = 0, w = 0;
+  d.forEach((v, i) => { e += OCT_W[i] * v * v; w += OCT_W[i]; });
+  return { dev: d, error: Math.sqrt(e / w) };
+}
+
 function spectrum(mono, fs) {
   const N = 4096, hop = 4096;
   const pw = new Float64Array(N / 2);
@@ -174,7 +189,14 @@ function spectrum(mono, fs) {
   const mid = bandDb.mid;
   const rel = {};
   for (const b of BANDS) rel[b.id] = bandDb[b.id] - mid;
-  return { rel, frames };
+  // 10 octave bands for the tonal-balance match
+  const oct = OCT.map((fc) => {
+    let s2 = 0, n2 = 0;
+    for (let k = Math.max(1, Math.round((fc / Math.SQRT2 * N) / fs)); k <= Math.min(N / 2 - 1, Math.round((fc * Math.SQRT2 * N) / fs)); k++) { s2 += pw[k]; n2++; }
+    return pdb(s2 / Math.max(1, frames));
+  });
+  const o1k = oct[5];
+  return { rel, frames, oct: oct.map((v) => v - o1k) };
 }
 
 // ---------------------------------------------------------------- analysis
@@ -251,6 +273,7 @@ export function analyseQuality(chs, fs, vocals = []) {
     lufs: I, lra: LRA, samplePeakDb: db(samplePeak), truePeakDb: db(tp), clips, dc, crest,
     corr, corrLow, sideDb: side, spectrum: spec.rel, rumbleDb, noiseFloor, leadSilence: (lead * W) / fs, trailSilence: (trail * W) / fs,
     sibilanceDb: sib,
+    tonal: tonal(spec.oct),
   };
 }
 
@@ -271,14 +294,24 @@ export function diagnose(m, target = -14) {
     if (m.corrLow < 0.6) add('wideBass', 'warn', m.corrLow, 'monoBass');
     if (m.sideDb < -30) add('mono', 'info', m.sideDb, null);
   }
-  const eq = [];
   for (const b of BANDS) {
     const dev = m.spectrum[b.id] - b.ref;
-    if (Math.abs(dev) >= 5 && !(b.id === 'air' && dev < 0 && dev > -8)) {
+    if (Math.abs(dev) >= 5 && !(b.id === 'air' && dev < 0 && dev > -8))
       add(dev > 0 ? `too_${b.id}` : `lack_${b.id}`, Math.abs(dev) > 8 ? 'bad' : 'warn', dev, 'eq');
-      eq.push({ band: b.id, f: b.f, gain: clamp(-dev * 0.4, -4, 3), q: b.id === 'sub' || b.id === 'air' ? 0.7 : 0.9 });
-    }
   }
+  // tonal balance: gentle 10-band match with a 1.5 dB dead zone (keeps the genre's character)
+  const td = m.tonal.dev;
+  const eq = OCT.map((f, i) => {
+    const d = td[i], mag = Math.max(0, Math.abs(d) - 1.5) * 0.6;
+    return { f, gain: clamp(-Math.sign(d) * mag, i === 0 || i === 9 ? -3 : -4, 3) };
+  }).filter((e) => Math.abs(e.gain) >= 0.3);
+  if (m.tonal.error > 3) add('tonal', m.tonal.error > 5 ? 'bad' : 'warn', m.tonal.error, 'eq');
+  if (td[3] + td[4] > 5) add('mud', 'warn', (td[3] + td[4]) / 2, 'dynEq');
+  if (td[6] + td[7] > 5) add('harsh', 'warn', (td[6] + td[7]) / 2, 'dynEq');
+  if (m.crest < 9 && m.crest >= 5) add('weakPunch', 'info', m.crest, 'punch');
+  if (m.channels > 1 && m.sideDb < -16 && m.corr > 0.3) add('narrow', 'info', m.sideDb, 'width');
+  const dull = td[8] < -2.5 || td[9] < -3.5;
+  if (dull) add('dull', 'warn', Math.min(td[8], td[9]), 'exciter');
   if (m.sibilanceDb > -10) add('sibilance', 'warn', m.sibilanceDb, 'deess');
   if (m.leadSilence > 1) add('leadSilence', 'info', m.leadSilence, null);
   if (m.trailSilence > 2) add('trailSilence', 'info', m.trailSilence, null);
@@ -289,82 +322,199 @@ export function diagnose(m, target = -14) {
     target,
     highpass: issues.some((i) => i.fix === 'highpass') ? 30 : 20,
     eq,
-    monoBass: issues.some((i) => i.fix === 'monoBass'),
+    monoBass: m.channels > 1,
     deess: issues.some((i) => i.fix === 'deess'),
     glue: issues.some((i) => i.fix === 'glue'),
+    dynEq: true,
+    multiband: true,
+    punch: m.crest < 10,
+    width: m.channels > 1 && m.sideDb < -16 && m.corr > 0.3,
+    exciter: dull,
+    exciterAmount: dull ? clamp(-Math.min(td[8], td[9] / 2) / 6, 0.35, 1.6) : 0,
+    pseudoStereo: m.channels > 1 && m.sideDb < -24,
   };
   return { issues, score, plan };
 }
 
-// ---------------------------------------------------------------- processing
+// ---------------------------------------------------------------- processing (v2)
+const lr4 = (x, type, fs, f) => { const k = coeffs(type, fs, f, 0.7071); return filt(filt(x, k), k); };
+function envelope(x, fs, attS, relS) {
+  const at = Math.exp(-1 / (attS * fs)), rl = Math.exp(-1 / (relS * fs));
+  const e = new Float32Array(x.length);
+  let v = 0;
+  for (let i = 0; i < x.length; i++) { const a = Math.abs(x[i]); v = a > v ? at * v + (1 - at) * a : rl * v + (1 - rl) * a; e[i] = v; }
+  return e;
+}
+function rmsOf(x) { let s = 0; for (let i = 0; i < x.length; i += 4) s += x[i] * x[i]; return Math.sqrt(s / (x.length / 4)) + 1e-9; }
+
 export function enhance(chs, fs, plan, onProgress = () => {}) {
   let out = chs.map((c) => Float32Array.from(c));
   const stereo = out.length > 1;
-  // 1. DC + rumble
-  const hp = coeffs('hp', fs, plan.highpass, 0.7071);
-  out = out.map((c) => filt(filt(c, hp), hp));
-  onProgress(0.15);
-  // 2. corrective EQ
+  const stages = [];
+  const n = out[0].length;
+
+  // 1. DC + rumble: 4th-order high-pass
+  out = out.map((c) => lr4(c, 'hp', fs, plan.highpass));
+  stages.push('highpass');
+  onProgress(0.06);
+
+  // 2. tonal balance: 10-band match to a modern reference
   for (const e of plan.eq) {
-    const k = e.band === 'sub' ? coeffs('lshelf', fs, 60, 0.7071, e.gain) : e.band === 'air' ? coeffs('hshelf', fs, 10000, 0.7071, e.gain) : coeffs('peak', fs, e.f, e.q, e.gain);
+    const k = e.f < 40 ? coeffs('lshelf', fs, 45, 0.7071, e.gain) : e.f > 12000 ? coeffs('hshelf', fs, 12000, 0.7071, e.gain) : coeffs('peak', fs, e.f, 1.0, e.gain);
     out = out.map((c) => filt(c, k));
   }
-  onProgress(0.35);
-  // 3. mono low end: remove the side signal below 120 Hz
-  if (stereo && plan.monoBass) {
-    const [L, R] = out, n = L.length;
-    const S = new Float32Array(n); for (let i = 0; i < n; i++) S[i] = (L[i] - R[i]) / 2;
-    const lp = coeffs('lp', fs, 120);
-    const Slow = filt(filt(S, lp), lp);
-    for (let i = 0; i < n; i++) { L[i] -= Slow[i]; R[i] += Slow[i]; }
+  if (plan.eq.length) stages.push('tonalEq');
+  onProgress(0.14);
+
+  // 3. dynamic EQ: tame mud (300 Hz) and harshness (3.5 kHz) only when they jump out.
+  //    Detection on the mono sum, same gain on both channels (keeps the stereo image).
+  if (plan.dynEq) {
+    for (const [f, q, maxCut] of [[300, 1.1, 0.45], [3500, 1.3, 0.5]]) {
+      const kb = coeffs('bp', fs, f, q);
+      const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a += c[i]; mono[i] = a / out.length; }
+      const bm = filt(mono, kb);
+      const env = envelope(bm, fs, 0.005, 0.12), full = envelope(mono, fs, 0.005, 0.12);
+      const ratios = []; for (let i = 0; i < n; i += 512) ratios.push(env[i] / (full[i] + 1e-9));
+      ratios.sort((a2, b2) => a2 - b2);
+      const typ = ratios[Math.floor(ratios.length * 0.6)] || 0.2;
+      const red = new Float32Array(n);
+      for (let i = 0; i < n; i++) { const r = env[i] / (full[i] + 1e-9) / (typ + 1e-9); red[i] = r > 1.4 ? Math.min(maxCut, (r - 1.4) * 0.5) : 0; }
+      out = out.map((c) => { const b = filt(c, kb), y = new Float32Array(n); for (let i = 0; i < n; i++) y[i] = c[i] - b[i] * red[i]; return y; });
+    }
+    stages.push('dynEq');
   }
-  onProgress(0.45);
-  // 4. de-esser: duck the 5-9 kHz band when it jumps out
+  onProgress(0.26);
+
+  // 4. 3-band compressor (crossovers 150 Hz / 4 kHz), gentle 2:1 above each band's own level.
+  //    Gains come from the mono sum and are shared by both channels.
+  if (plan.multiband) {
+    const split = (c) => { const low = lr4(c, 'lp', fs, 150), high = lr4(c, 'hp', fs, 4000), mid = new Float32Array(n); for (let i = 0; i < n; i++) mid[i] = c[i] - low[i] - high[i]; return [low, mid, high]; };
+    const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a += c[i]; mono[i] = a / out.length; }
+    const mb = split(mono);
+    const times = [[0.012, 0.18], [0.006, 0.1], [0.002, 0.06]];
+    const gains = mb.map((b, k) => {
+      const env = envelope(b, fs, times[k][0], times[k][1]), thr = rmsOf(b) * 1.8, g = new Float32Array(n);
+      for (let i = 0; i < n; i++) g[i] = env[i] > thr ? Math.sqrt(thr / env[i]) : 1;
+      return g;
+    });
+    out = out.map((c) => { const bs = split(c), y = new Float32Array(n); for (let k = 0; k < 3; k++) for (let i = 0; i < n; i++) y[i] += bs[k][i] * gains[k][i]; return y; });
+    stages.push('multiband');
+  }
+  onProgress(0.4);
+
+  // 5. glue (only for very wide dynamics)
+  if (plan.glue) {
+    const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a = Math.max(a, Math.abs(c[i])); mono[i] = a; }
+    const env = envelope(mono, fs, 0.03, 0.3), thr = rmsOf(mono) * 1.4;
+    for (let i = 0; i < n; i++) { const g = env[i] > thr ? (thr / env[i]) ** 0.5 : 1; for (const c of out) c[i] *= g; }
+    stages.push('glue');
+  }
+
+  // 6. punch: transient shaper (fast vs slow envelope), up to +3.5 dB on attacks
+  if (plan.punch) {
+    const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a += c[i]; mono[i] = a / out.length; }
+    const fast = envelope(mono, fs, 0.0008, 0.03), slow = envelope(mono, fs, 0.02, 0.2);
+    const g = new Float32Array(n);
+    let sm = 1;
+    const k = Math.exp(-1 / (0.002 * fs));
+    for (let i = 0; i < n; i++) {
+      const tgt = 1 + clamp((fast[i] / (slow[i] + 1e-9) - 1) * 0.5, 0, 0.5);
+      sm = k * sm + (1 - k) * tgt; g[i] = sm;
+    }
+    for (const c of out) for (let i = 0; i < n; i++) c[i] *= g[i];
+    stages.push('punch');
+  }
+  onProgress(0.5);
+
+  // 7. stereo: mono low end, a little more width above 3 kHz when the mix is narrow
+  if (stereo) {
+    const [L, R] = out;
+    const S = new Float32Array(n); for (let i = 0; i < n; i++) S[i] = (L[i] - R[i]) / 2;
+    const sLow = lr4(S, 'lp', fs, 120);
+    const sHigh = plan.width ? lr4(S, 'hp', fs, 3000) : null;
+    for (let i = 0; i < n; i++) {
+      const d = -sLow[i] + (sHigh ? sHigh[i] * 0.3 : 0);
+      L[i] += d; R[i] -= d;
+    }
+    stages.push(plan.width ? 'stereoWide' : 'monoBass');
+    if (plan.pseudoStereo) {
+      const M = new Float32Array(n); for (let i = 0; i < n; i++) M[i] = (L[i] + R[i]) / 2;
+      let d = lr4(M, 'hp', fs, 1500);
+      for (const f of [700, 1900, 4300, 9100]) d = filt(d, coeffs('ap', fs, f, 0.6));
+      for (let i = 0; i < n; i++) { const v = d[i] * 0.28; L[i] += v; R[i] -= v; }
+      stages.push('pseudoStereo');
+    }
+  }
+  onProgress(0.58);
+
+  // 8. exciter: soft harmonics above 5 kHz when the top end is dull, stronger the duller it is
+  if (plan.exciter) {
+    const amt = plan.exciterAmount || 0.35;
+    const src = amt > 0.8 ? 2000 : 3000;
+    out = out.map((c) => {
+      const h = lr4(c, 'hp', fs, src);
+      const sat = new Float32Array(n); for (let i = 0; i < n; i++) sat[i] = Math.tanh(h[i] * 5) / 5;
+      const harm = lr4(sat, 'hp', fs, 5000);
+      const y = new Float32Array(n); for (let i = 0; i < n; i++) y[i] = c[i] + harm[i] * amt;
+      return y;
+    });
+    stages.push('exciter');
+  }
+  onProgress(0.64);
+
+  // 9. de-esser
   if (plan.deess) {
     const k1 = coeffs('hp', fs, 5000), k2 = coeffs('lp', fs, 9000);
     out = out.map((c) => {
       const b = filt(filt(c, k1), k2);
-      const y = Float32Array.from(c);
-      let env = 0, envAll = 0;
-      const at = Math.exp(-1 / (0.002 * fs)), rl = Math.exp(-1 / (0.06 * fs));
-      for (let i = 0; i < c.length; i++) {
-        const a = Math.abs(b[i]), aa = Math.abs(c[i]);
-        env = a > env ? at * env + (1 - at) * a : rl * env + (1 - rl) * a;
-        envAll = aa > envAll ? at * envAll + (1 - at) * aa : rl * envAll + (1 - rl) * aa;
-        const ratio = env / (envAll + 1e-9);
-        const red = ratio > 0.35 ? Math.min(0.6, (ratio - 0.35) * 1.5) : 0;
-        y[i] = c[i] - b[i] * red;
-      }
+      const env = envelope(b, fs, 0.002, 0.06), full = envelope(c, fs, 0.002, 0.06);
+      const y = new Float32Array(n);
+      for (let i = 0; i < n; i++) { const r = env[i] / (full[i] + 1e-9); y[i] = c[i] - b[i] * (r > 0.35 ? Math.min(0.6, (r - 0.35) * 1.5) : 0); }
       return y;
     });
-  }
-  onProgress(0.55);
-  // 5. glue compressor (2:1, slow) only when the dynamics are very wide
-  if (plan.glue) {
-    const n = out[0].length;
-    const at = Math.exp(-1 / (0.03 * fs)), rl = Math.exp(-1 / (0.3 * fs));
-    let env = 0;
-    let ms = 0; for (let i = 0; i < n; i += 8) { const v = out[0][i]; ms += v * v; }
-    const thr = Math.sqrt(ms / (n / 8)) * 1.4;
-    for (let i = 0; i < n; i++) {
-      let a = 0; for (const c of out) a = Math.max(a, Math.abs(c[i]));
-      env = a > env ? at * env + (1 - at) * a : rl * env + (1 - rl) * a;
-      const g = env > thr ? (thr / env) ** 0.5 : 1;
-      for (const c of out) c[i] *= g;
-    }
+    stages.push('deess');
   }
   onProgress(0.7);
-  // 6 + 7. loudness normalisation and look-ahead limiter; the second pass corrects
-  // the loudness the limiter took away
+
+  // 9b. closed loop: measure the tonal balance again and correct what is left (2 passes)
+  if (plan.eq.length || plan.multiband) {
+    for (let pass = 0; pass < 2; pass++) {
+      const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a += c[i]; mono[i] = a / out.length; }
+      const td = tonal(spectrum(mono, fs).oct).dev;
+      const fix = OCT.map((f, i) => ({ f, gain: clamp(-Math.sign(td[i]) * Math.max(0, Math.abs(td[i]) - 0.8) * 0.75, -3, i >= 8 && plan.exciter ? 4 : 2.5) })).filter((e) => Math.abs(e.gain) >= 0.25);
+      if (!fix.length) break;
+      for (const e of fix) {
+        const k = e.f < 40 ? coeffs('lshelf', fs, 45, 0.7071, e.gain) : e.f > 12000 ? coeffs('hshelf', fs, 12000, 0.7071, e.gain) : coeffs('peak', fs, e.f, 1.0, e.gain);
+        out = out.map((c) => filt(c, k));
+      }
+    }
+    stages.push('tonalLoop');
+  }
+  onProgress(0.76);
+
+  // 10. loudness + true-peak limiter (peaks measured with 4x oversampling)
+  const club = plan.target >= -10;
   const limited = (src, gainDb) => {
     const gain = 10 ** (gainDb / 20);
-    const res = src.map((c) => { const y = new Float32Array(c.length); for (let i = 0; i < c.length; i++) y[i] = c[i] * gain; return y; });
-    const ceil = 10 ** (-2 / 20);
-    const n = res[0].length, look = Math.round(0.004 * fs);
+    const res = src.map((c) => { const y = new Float32Array(n); for (let i = 0; i < n; i++) y[i] = c[i] * gain; return y; });
+    if (club) {
+      // soft clipper shaves the sharpest peaks before the limiter, so loud masters keep their punch
+      const t = 10 ** (-3 / 20);
+      for (const c of res) for (let i = 0; i < n; i++) { const v = c[i], a = Math.abs(v); if (a > t) c[i] = Math.sign(v) * (t + (1 - t) * Math.tanh((a - t) / (1 - t))); }
+    }
+    const ceil = 10 ** (-1.2 / 20);
     const peak = new Float32Array(n);
-    for (let i = 0; i < n; i++) { let a = 0; for (const c of res) a = Math.max(a, Math.abs(c[i])); peak[i] = a; }
-    const need = new Float32Array(n);
-    const dq = [];
+    const L = OS_TAPS[0].length, h = L >> 1;
+    for (const c of res) {
+      for (let i = 0; i < n; i++) {
+        let a = Math.abs(c[i]);
+        if (a > ceil * 0.6 && i >= h && i < n - h) {
+          for (let p = 1; p < 4; p++) { let v = 0; const row = OS_TAPS[p]; for (let k = 0; k < L; k++) v += row[k] * c[i - h + k]; if (Math.abs(v) > a) a = Math.abs(v); }
+        }
+        if (a > peak[i]) peak[i] = a;
+      }
+    }
+    const look = Math.round(0.004 * fs), need = new Float32Array(n), dq = [];
     let head = 0;
     for (let i = n - 1; i >= 0; i--) {
       while (dq.length > head && peak[dq[dq.length - 1]] <= peak[i]) dq.pop();
@@ -377,7 +527,7 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
     let g = 1;
     for (let i = 0; i < n; i++) {
       g = need[i] < g ? Math.max(need[i], at * g + (1 - at) * need[i]) : rl * g + (1 - rl) * need[i];
-      if (g > need[i] && peak[i] * g > ceil) g = need[i];
+      if (peak[i] * g > ceil) g = Math.min(g, ceil / peak[i]);
       for (const c of res) c[i] *= g;
     }
     return res;
@@ -387,11 +537,12 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
   let res = limited(out, gDb);
   onProgress(0.85);
   const got = loudness(res, fs).I;
-  if (Math.abs(got - plan.target) > 0.3) { gDb += Math.min(3, plan.target - got); res = limited(out, gDb); }
+  if (Math.abs(got - plan.target) > 0.25) { gDb += clamp(plan.target - got, -3, 3); res = limited(out, gDb); }
   out = res;
-  onProgress(0.95);
-  for (const c of out) for (let i = 0; i < c.length; i++) c[i] = clamp(c[i], -1, 1);
-  return out;
+  stages.push('loudness');
+  onProgress(0.97);
+  for (const c of out) for (let i = 0; i < n; i++) c[i] = clamp(c[i], -1, 1);
+  return { chs: out, stages };
 }
 
 export { BANDS };

@@ -165,3 +165,13 @@ input.txt { width: 100%; margin-bottom: 8px; }
 .one-inline { margin-top: 10px; }
 .one-inline .layer { grid-template-columns: 1fr 1fr; }
 .one-inline .layer-name { grid-column: 1 / -1; }
+
+.music-dl { border-top: 1px dashed var(--line); margin-top: 14px; padding-top: 8px; }
+.stages ol { margin: 4px 0 8px; padding-left: 20px; color: #c9cdd8; font-size: 13px; columns: 2; column-gap: 24px; }
+.mood-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.layers-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.layers-head .sub { margin: 0; }
+.layers-head button.on, .colpick .auto.on { border-color: var(--accent); background: rgba(124, 92, 255, .3); }
+.colpick { display: inline-flex; align-items: center; gap: 4px; }
+.colpick .auto { padding: 3px 6px; font-size: 11px; }
+.layer { grid-template-columns: minmax(110px, 1.2fr) 1fr 1fr auto 1fr; }

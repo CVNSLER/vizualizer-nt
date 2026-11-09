@@ -619,11 +619,28 @@ export function deepAnalyse(input, inputSr, progress = () => {}) {
     }
   }
 
+  // overall character for the "1" template builder (tempo + atmosphere)
+  const loudF = [];
+  for (let t = 0; t < T; t++) if (rmsF[t] > 1e-4) loudF.push(t);
+  const brightness = loudF.length ? loudF.reduce((a2, t) => a2 + centS[t], 0) / loudF.length : 10;
+  const rDb = loudF.map((t) => 20 * Math.log10(rmsF[t] + 1e-9));
+  const eMean = rDb.length ? rDb.reduce((a2, b2) => a2 + b2, 0) / rDb.length : -30;
+  const eStd = rDb.length ? Math.sqrt(rDb.reduce((a2, b2) => a2 + (b2 - eMean) ** 2, 0) / rDb.length) : 0;
+  const stats = {
+    brightness, energyDb: eMean, energyStd: eStd,
+    drumRate: (kicks.length + snares.length + hats.length + ohats.length) / Math.max(1, duration),
+    kickRate: kicks.length / Math.max(1, duration),
+    vocalCover: vocalFinal.reduce((a2, v) => a2 + v.t1 - v.t0, 0) / Math.max(1, duration),
+    risers: sfx.filter((x) => x.type === 'riser').length,
+    drops: sections.filter((x) => x.kind === 'drop' || x.kind === 'chorus').length,
+    sectionSpread: sections.length ? Math.max(...sections.map((x) => x.energy)) - Math.min(...sections.map((x) => x.energy)) : 0,
+  };
+
   progress(1, 'done');
   const strip = (l) => l.map(({ t, s }) => ({ t, s }));
   return {
     version: 1, duration, bpm, key, beats, downbeats,
     events: { kick: strip(kicks), snare: strip(snares), hat: strip(hats), ohat: strip(ohats), bass: bassNotes },
-    vocals: vocalFinal, sfx, sections, curves, curveFps: OUT_FPS,
+    vocals: vocalFinal, sfx, sections, curves, curveFps: OUT_FPS, stats,
   };
 }

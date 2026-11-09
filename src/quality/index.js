@@ -26,7 +26,7 @@ export async function improveQuality(buffer, plan, vocals, onProgress) {
   const ctx = new OfflineAudioContext(res.chs.length, res.chs[0].length, buffer.sampleRate);
   const out = ctx.createBuffer(res.chs.length, res.chs[0].length, buffer.sampleRate);
   res.chs.forEach((c, i) => out.copyToChannel(c, i));
-  return { buffer: out, after: res.after, issues: res.issues, score: res.score };
+  return { buffer: out, after: res.after, issues: res.issues, score: res.score, stages: res.stages };
 }
 
 // 16-bit WAV for playback in the <audio> element

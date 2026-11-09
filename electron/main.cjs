@@ -22,11 +22,11 @@ function createWindow() {
 
 // Save the finished video. Receives the file as chunks to keep IPC messages small.
 let pending = null;
-ipcMain.handle('save:choose', async (_e, { defaultName, title }) => {
+ipcMain.handle('save:choose', async (_e, { defaultName, title, ext = 'mp4' }) => {
   const res = await dialog.showSaveDialog({
     title,
-    defaultPath: path.join(app.getPath('videos'), defaultName),
-    filters: [{ name: 'MP4', extensions: ['mp4'] }],
+    defaultPath: path.join(app.getPath(ext === 'mp4' ? 'videos' : 'music'), defaultName),
+    filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
   });
   if (res.canceled || !res.filePath) return null;
   pending = { file: res.filePath, fd: fs.openSync(res.filePath, 'w') };

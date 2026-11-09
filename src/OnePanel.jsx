@@ -1,13 +1,25 @@
 import { EFFECTS, POSITIONS } from './one.js';
+import { peekAutoColors } from './palette.js';
+import { useEffect, useState } from 'react';
 
 const LEVEL_ICON = { bad: '●', warn: '●', info: '●' };
 const fmt1 = (v) => (Math.round(v * 10) / 10).toFixed(1);
 
 export function LayerEditor({ T, layers, onChange }) {
+  // show the colours the auto mode is using right now
+  const [live, setLive] = useState(null);
+  useEffect(() => { const id = setInterval(() => setLive(peekAutoColors()), 400); return () => clearInterval(id); }, []);
   if (!layers?.length) return null;
   const upd = (i, patch) => onChange(layers.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  const allAuto = layers.every((l) => l.colorAuto);
   return (
     <div className="layers">
+      <div className="layers-head">
+        <span className="sub">{T.colorsLabel}</span>
+        <button className={allAuto ? 'on' : ''} onClick={() => onChange(layers.map((l) => ({ ...l, colorAuto: !allAuto })))} title={T.autoColorHint}>
+          {allAuto ? T.autoAllOn : T.autoAll}
+        </button>
+      </div>
       {layers.map((l, i) => (
         <div key={l.sound} className={`layer ${l.on ? '' : 'off'}`}>
           <label className="check layer-name">
@@ -20,7 +32,11 @@ export function LayerEditor({ T, layers, onChange }) {
           <select id={`layer-${l.sound}-pos`} value={l.pos} onChange={(e) => upd(i, { pos: e.target.value })} aria-label={T.layerPos}>
             {POSITIONS.map((p) => <option key={p} value={p}>{T.layerPositions[p]}</option>)}
           </select>
-          <input id={`layer-${l.sound}-col`} type="color" value={l.color} onChange={(e) => upd(i, { color: e.target.value })} aria-label={T.color1} />
+          <span className="colpick">
+            <input id={`layer-${l.sound}-col`} type="color" value={l.colorAuto && live?.[l.sound] ? live[l.sound] : l.color}
+              onChange={(e) => upd(i, { color: e.target.value, colorAuto: false })} aria-label={T.color1} />
+            <button className={`auto ${l.colorAuto ? 'on' : ''}`} onClick={() => upd(i, { colorAuto: !l.colorAuto })} title={T.autoColorHint}>{T.auto}</button>
+          </span>
           <input id={`layer-${l.sound}-amt`} type="range" min={0.1} max={1.5} step={0.05} value={l.amount} onChange={(e) => upd(i, { amount: +e.target.value })} aria-label={T.layerAmount} />
         </div>
       ))}
@@ -28,7 +44,7 @@ export function LayerEditor({ T, layers, onChange }) {
   );
 }
 
-export default function OnePanel({ T, hasAudio, deepReady, quality, onCheck, onImprove, target, setTarget, useEnhanced, setUseEnhanced, onBuild, onVariant, layers, setLayers, onClose }) {
+export default function OnePanel({ T, hasAudio, deepReady, quality, onCheck, onImprove, target, setTarget, useEnhanced, setUseEnhanced, onBuild, onVariant, layers, setLayers, mood, detected, moodPick, setMoodPick, moods, onClose }) {
   const q = quality;
   const issueText = (i) => {
     const f = T.issues[i.id] || T.issues[i.id.replace(/^(too|lack)_.*/, '$1_band')];
@@ -66,6 +82,7 @@ export default function OnePanel({ T, hasAudio, deepReady, quality, onCheck, onI
                     <Metric label={T.mLra} a={`${fmt1(m.lra)} LU`} b={after && `${fmt1(after.lra)} LU`} />
                     <Metric label={T.mCrest} a={`${fmt1(m.crest)} dB`} b={after && `${fmt1(after.crest)} dB`} />
                     {m.channels > 1 && <Metric label={T.mCorr} a={m.corr.toFixed(2)} b={after && after.corr.toFixed(2)} />}
+                    {m.tonal && <Metric label={T.mTonal} a={`${fmt1(m.tonal.error)} dB`} b={after?.tonal && `${fmt1(after.tonal.error)} dB`} />}
                   </div>
                 </div>
                 <ul className="issues">
@@ -104,6 +121,12 @@ export default function OnePanel({ T, hasAudio, deepReady, quality, onCheck, onI
                     </div>
                   )}
                 </div>
+                {q.enhanced?.stages && (
+                  <div className="stages">
+                    <span className="sub">{T.stagesDone}</span>
+                    <ol>{q.enhanced.stages.map((st) => <li key={st}>{T.stageNames[st] || st}</li>)}</ol>
+                  </div>
+                )}
                 <p className="hint">{T.qualityNote}</p>
               </>
             )}
@@ -113,6 +136,14 @@ export default function OnePanel({ T, hasAudio, deepReady, quality, onCheck, onI
         <section className="one-sec">
           <h3>{T.builderTitle}</h3>
           <p className="hint">{deepReady ? T.builderHint : T.builderWait}</p>
+          <div className="mood-row">
+            <span>{T.moodLabel}:</span>
+            <select id="mood-pick" value={moodPick} onChange={(e) => setMoodPick(e.target.value)}>
+              <option value="auto">{T.moodAuto}{detected ? ` (${T.moodNames[detected.id]})` : ''}</option>
+              {moods.map((id) => <option key={id} value={id}>{T.moodNames[id]}</option>)}
+            </select>
+            {detected && <span className="hint">{detected.bpm} BPM · {T.moodNow}: <b>{T.moodNames[mood || detected.id]}</b></span>}
+          </div>
           <div className="q-actions">
             <button className="primary" onClick={onBuild} disabled={!hasAudio}>{T.buildNow}</button>
             <button onClick={onVariant} disabled={!layers?.length}>{T.variant}</button>
