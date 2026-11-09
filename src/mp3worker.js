@@ -1,8 +1,12 @@
-import { Mp3Encoder } from '@breezystack/lamejs';
+// MP3 encoding with LAME. The encoder (~400 KB) is fetched from the CDN only when an MP3 is
+// requested, so the app itself stays small.
+const LAME_URL = 'https://cdn.jsdelivr.net/npm/@breezystack/lamejs@1.2.7/dist/lamejs.iife.js';
 
 self.onmessage = (e) => {
   const { chs, sr, kbps } = e.data;
   try {
+    if (!self.lamejs) importScripts(LAME_URL);
+    const { Mp3Encoder } = self.lamejs;
     const ch = chs.length;
     const rate = [32000, 44100, 48000].includes(sr) ? sr : 44100;
     const enc = new Mp3Encoder(ch, rate, kbps);
@@ -23,6 +27,6 @@ self.onmessage = (e) => {
     let o = 0; for (const p of parts) { out.set(p, o); o += p.length; }
     self.postMessage({ type: 'done', data: out.buffer }, [out.buffer]);
   } catch (err) {
-    self.postMessage({ type: 'error', message: String(err && err.message || err) });
+    self.postMessage({ type: 'error', message: 'MP3: ' + String(err && err.message || err) });
   }
 };
