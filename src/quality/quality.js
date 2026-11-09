@@ -662,10 +662,15 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
     const aS = Math.min(1.5, A('stereo'));
     const [L, R] = out;
     const S = new Float32Array(n); for (let i = 0; i < n; i++) S[i] = (L[i] - R[i]) / 2;
-    const sLow = lr4(S, 'lp', fs, 120);
-    const sHigh = plan.width ? lr4(S, 'hp', fs, 3000) : null;
+    // the side signal is replaced by its high-passed copy (Linkwitz-Riley): below the cut-off the
+    // bass becomes mono. (Subtracting a low-passed copy instead is wrong: near the cut-off the
+    // low-pass is 180 degrees out of phase, so S - LP(S) made the side 1.5x LOUDER around 120 Hz.)
+    const cut = 40 + 80 * Math.min(1, aS);
+    const sKeep = lr4(S, 'hp', fs, cut);
+    const sHigh = plan.width ? lr4(sKeep, 'hp', fs, 3000) : null;
     for (let i = 0; i < n; i++) {
-      const d = (-sLow[i] + (sHigh ? sHigh[i] * 0.3 : 0)) * Math.min(1, aS);
+      const sNew = sKeep[i] + (sHigh ? sHigh[i] * 0.3 * Math.min(1, aS) : 0);
+      const d = sNew - S[i];
       L[i] += d; R[i] -= d;
     }
     stages.push(plan.width ? 'stereoWide' : 'monoBass');
