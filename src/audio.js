@@ -228,5 +228,30 @@ export function sample(an, t) {
     },
     bassAt: (dt) => an.bassS[Math.max(0, Math.min(an.frames - 1, fi - Math.round(dt * ANALYSIS_FPS)))],
     duration: an.duration,
+    ...deepAt(an, t),
   };
+}
+
+// Per-instrument values from the deep "Algoritm" analysis (falls back to the quick analysis).
+function deepAt(an, t) {
+  const d = an.deep;
+  if (d) {
+    const c = d.curves, j = Math.max(0, Math.min(c.kick.length - 1, Math.round(t * d.curveFps)));
+    let section = null;
+    for (let i = 0; i < d.sections.length; i++) {
+      const s = d.sections[i];
+      if (t >= s.t0 && t < s.t1) { section = { ...s, idx: i, progress: (t - s.t0) / Math.max(0.01, s.t1 - s.t0), prev: d.sections[i - 1] || null }; break; }
+    }
+    return { deep: true, kick: c.kick[j], snare: c.snare[j], hat: Math.max(c.hat[j], c.ohat[j] * 0.8), ohat: c.ohat[j], vocal: c.vocal[j], sfx: c.sfx[j], section };
+  }
+  const pulse = (reg, decay) => {
+    for (let i = an.beats.length - 1; i >= 0; i--) {
+      const b = an.beats[i];
+      if (b.t > t) continue;
+      if (t - b.t > decay * 5) break;
+      if (b.reg === reg) return Math.min(1.3, b.s) * Math.exp(-(t - b.t) / decay);
+    }
+    return 0;
+  };
+  return { deep: false, kick: pulse(0, 0.11), snare: pulse(1, 0.13), hat: pulse(2, 0.05), ohat: 0, vocal: 0, sfx: 0, section: null };
 }

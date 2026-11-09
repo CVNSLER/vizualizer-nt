@@ -104,3 +104,26 @@ input.txt { width: 100%; margin-bottom: 8px; }
 .fx { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 6px; }
 
 .tpl-none { width: 100%; margin-bottom: 4px; text-align: center; }
+
+.algo-btn { width: 100%; margin-top: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; border-color: var(--accent); background: rgba(124, 92, 255, .12); }
+.algo-btn small { color: var(--muted); }
+.modal.algo { width: min(1100px, calc(100% - 32px)); max-height: calc(100% - 40px); overflow-y: auto; }
+.algo-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.algo-head h2 { margin: 0; }
+.algo-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin: 8px 0 12px; }
+.stat { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; }
+.stat span { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.stat b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.stat i, .algo-legend i, .algo-sections i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.algo-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.algo-legend span { display: flex; align-items: center; gap: 6px; }
+.algo-timeline { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+.algo-inner { position: relative; cursor: pointer; }
+.algo-inner canvas { display: block; }
+.algo-head-line { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: #fff; box-shadow: 0 0 6px #fff; pointer-events: none; }
+.algo-controls { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: center; margin: 10px 0; }
+.algo-controls .check { margin: 0; }
+.algo-controls .sub { margin: 0; }
+.algo-sections { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; }
+.algo-sections button { display: flex; align-items: center; gap: 8px; text-align: left; flex-wrap: wrap; }
+.algo-sections span { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }

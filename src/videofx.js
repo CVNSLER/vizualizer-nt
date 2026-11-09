@@ -22,7 +22,7 @@ function rnd(seed) {
 // ---------------------------------------------------------------- time mapping (speed ramp + beat cuts)
 const mapCache = new WeakMap();
 function timeMap(an, o) {
-  const key = `${o.fxSpeed || 0}|${o.fxCut || 0}`;
+  const key = `${o.fxSpeed || 0}|${o.fxCut || 0}|${an.deep ? 1 : 0}`;
   let m = mapCache.get(an);
   if (!m) { m = new Map(); mapCache.set(an, m); }
   if (m.has(key)) return m.get(key);
@@ -42,8 +42,14 @@ function timeMap(an, o) {
   }
   const cuts = [];
   if (o.fxCut > 0) {
-    const strong = an.beats.filter((b) => b.s >= 0.5);
-    for (let i = o.fxCut; i < strong.length; i += o.fxCut) cuts.push(strong[i].t);
+    if (an.deep && an.deep.beats.length > 8) {
+      // cut on real beats, counted from the first downbeat so cuts land on bar lines
+      const b = an.deep.beats, first = Math.max(0, b.indexOf(an.deep.downbeats[0]));
+      for (let i = first + o.fxCut; i < b.length; i += o.fxCut) cuts.push(b[i]);
+    } else {
+      const strong = an.beats.filter((b) => b.s >= 0.5);
+      for (let i = o.fxCut; i < strong.length; i += o.fxCut) cuts.push(strong[i].t);
+    }
   }
   const data = { speed, cum, cuts };
   m.set(key, data);
@@ -77,6 +83,7 @@ export function videoRateAt(an, o, t) {
 // ---------------------------------------------------------------- per-frame looks
 /** 0..~1.3 pulse right after a beat */
 export function beatPulse(f) {
+  if (f.deep) return Math.min(1.3, f.kick);
   if (!f.lastBeat) return 0;
   return Math.min(1.3, f.lastBeat.s) * Math.exp(-f.sinceBeat * 7);
 }
@@ -110,7 +117,8 @@ export function applyBgFx(ctx, W, H, o, f) {
   }
 
   // RGB split + slices on strong hits, constant light split for VHS
-  const hit = o.fxGlitch > 0 && f.lastBeat && f.lastBeat.s > 0.7 ? Math.exp(-f.sinceBeat * 10) * o.fxGlitch : 0;
+  const hit = !(o.fxGlitch > 0) ? 0 : f.deep ? Math.max(0, f.snare - 0.25) * 1.3 * o.fxGlitch
+    : f.lastBeat && f.lastBeat.s > 0.7 ? Math.exp(-f.sinceBeat * 10) * o.fxGlitch : 0;
   const split = hit * 26 * u + (o.fxVhs || 0) * 4 * u;
   if (split > 0.6) {
     work = sized(work, W, H); red = sized(red, W, H); cyan = sized(cyan, W, H);
@@ -126,7 +134,7 @@ export function applyBgFx(ctx, W, H, o, f) {
     ctx.globalCompositeOperation = 'lighter'; ctx.drawImage(red, -split, 0);
     ctx.restore();
     if (hit > 0.15) {
-      const seed = Math.floor(f.lastBeat.t * 1000);
+      const seed = Math.floor((f.lastBeat ? f.lastBeat.t : f.t) * 1000);
       for (let i = 0; i < 7; i++) {
         const sy = rnd(seed + i * 3) * H, sh = (8 + rnd(seed + i * 3 + 1) * 70) * u;
         const off = (rnd(seed + i * 3 + 2) - 0.5) * 160 * u * hit;

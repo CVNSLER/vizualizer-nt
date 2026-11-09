@@ -5,6 +5,8 @@ import { analyse, decodeFile, sample } from './audio.js';
 import { exportVideo, saveVideo } from './exporter.js';
 import { FONTS, loadFont, previewFont } from './fonts.js';
 import { FX_PRESETS, FX_KEYS, videoTimeAt, videoRateAt } from './videofx.js';
+import { runDeepAnalysis } from './deep/index.js';
+import AlgoPanel, { playClick } from './AlgoPanel.jsx';
 
 const FORMATS = { '9:16': [9, 16], '1:1': [1, 1], '4:5': [4, 5], '16:9': [16, 9] };
 const QUALITIES = { '720p': 720, '1080p': 1080, '4K': 2160 };
@@ -57,6 +59,12 @@ export default function App() {
   const canvasRef = useRef(null);
   const audioRef = useRef(null);
   const abortRef = useRef(null);
+  const deepJob = useRef(null);
+  const [deepStatus, setDeepStatus] = useState({ status: 'idle', p: 0 });
+  const [algoOpen, setAlgoOpen] = useState(false);
+  const [audition, setAudition] = useState({});
+  const auditionRef = useRef({ last: 0 });
+  auditionRef.current.cfg = audition;
 
   useEffect(() => { try { localStorage.setItem('viz-settings', JSON.stringify(s)); } catch { /* ignore */ } }, [s]);
   useEffect(() => { try { localStorage.setItem('viz-lang', lang); } catch { /* ignore */ } }, [lang]);
@@ -89,6 +97,18 @@ export default function App() {
       } else {
         renderFrame(ctx, pw, ph, options, idleFeatures(performance.now() / 1000), 0);
       }
+      // "Algoritm" check: click on every detected event while the song plays
+      const ar = auditionRef.current, cfg = ar.cfg || {}, dp = audio?.analysis?.deep;
+      if (el) el.volume = cfg.duck ? 0.3 : 1;
+      if (dp && el && !el.paused && (cfg.kick || cfg.snare || cfg.hat || cfg.vocal)) {
+        if (t < ar.last || t - ar.last > 0.5) ar.last = t;
+        const crossed = (list, key = 't') => list.some((e) => e[key] > ar.last && e[key] <= t);
+        if (cfg.kick && crossed(dp.events.kick)) playClick('kick');
+        if (cfg.snare && crossed(dp.events.snare)) playClick('snare');
+        if (cfg.hat) { if (crossed(dp.events.hat)) playClick('hat'); if (crossed(dp.events.ohat)) playClick('ohat'); }
+        if (cfg.vocal && crossed(dp.vocals, 't0')) playClick('vocal');
+      }
+      ar.last = t;
       setTime(t);
       raf = requestAnimationFrame(loop);
     };
@@ -108,6 +128,17 @@ export default function App() {
       const analysis = analyse(buffer);
       const url = URL.createObjectURL(file);
       setAudio({ name: file.name, url, buffer, analysis });
+      // deep "Algoritm" analysis runs in the background
+      deepJob.current?.cancel();
+      setDeepStatus({ status: 'running', p: 0, stage: 'stft' });
+      const job = runDeepAnalysis(buffer, (p, stage) => setDeepStatus((d) => (d.status === 'running' ? { ...d, p, stage } : d)));
+      deepJob.current = job;
+      job.promise.then((res) => {
+        if (deepJob.current !== job) return;
+        analysis.deep = res;
+        setDeepStatus({ status: 'done', p: 1 });
+        setAudio((a) => (a && a.analysis === analysis ? { ...a } : a));
+      }).catch((e) => { if (deepJob.current === job) setDeepStatus({ status: 'error', p: 0, msg: e.message }); });
     } catch (e) {
       setNotice(`${T.error} ${e.message}`);
     }
@@ -206,8 +237,13 @@ export default function App() {
           <label className="drop" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); onAudioFile(e.dataTransfer.files[0]); }}>
             <input type="file" accept="audio/*" hidden onChange={(e) => onAudioFile(e.target.files[0])} />
             <strong>{audio ? audio.name : T.chooseAudio}</strong>
-            <span>{audio ? `${fmtTime(dur)} · ${T.bpm} ${audio.analysis.bpm} BPM · ${audio.analysis.beats.length} ${T.beats}` : T.dropHint}</span>
+            <span>{audio ? `${fmtTime(dur)} · ${T.bpm} ${audio.analysis.deep?.bpm ?? audio.analysis.bpm} BPM · ${audio.analysis.beats.length} ${T.beats}` : T.dropHint}</span>
           </label>
+          <button id="algo-btn" className="algo-btn" onClick={() => setAlgoOpen(true)} disabled={!audio}>
+            <b>{T.algo}</b>
+            <small>{deepStatus.status === 'running' ? `${T.algoRunning} ${Math.round(deepStatus.p * 100)}%`
+              : deepStatus.status === 'done' ? T.algoReady : deepStatus.status === 'error' ? T.error : T.algoHint}</small>
+          </button>
         </Section>
 
         <Section title={T.template}>
@@ -375,6 +411,10 @@ export default function App() {
         {audio && <audio ref={audioRef} src={audio.url} onEnded={() => setPlaying(false)} />}
       </main>
 
+      {algoOpen && (
+        <AlgoPanel T={T} deep={audio?.analysis?.deep} status={deepStatus} audioRef={audioRef}
+          audition={audition} setAudition={setAudition} onClose={() => setAlgoOpen(false)} />
+      )}
       {exp && (
         <div className="modal-bg">
           <div className="modal">

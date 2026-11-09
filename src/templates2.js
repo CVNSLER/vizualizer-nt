@@ -853,3 +853,93 @@ draw.glitter = (ctx, W, H, o, f) => {
   ctx.restore();
   coverDisc(ctx, cx, cy, r - 12 * u, o, f, u);
 };
+
+// ---------------------------------------------------------------- "0": no shapes at all, only light and colour
+// Reads the deep analysis: kick = centre bloom, snare = edge glow, hats = shimmer,
+// vocal = drifting warm light, risers = white-out, sections = colour and intensity.
+const SECTION_LOOK = {
+  intro: [0.1, 0.45], verse: [0.35, 0.65], section: [0.4, 0.65], build: [0.5, 0.8],
+  chorus: [0.75, 1], drop: [1, 1], breakdown: [0.2, 0.45], outro: [0.1, 0.35],
+};
+let zeroGrain = null;
+function grainTile() {
+  if (zeroGrain) return zeroGrain;
+  zeroGrain = document.createElement('canvas');
+  zeroGrain.width = zeroGrain.height = 256;
+  const g = zeroGrain.getContext('2d'), img = g.createImageData(256, 256), R = rng(99);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = R() > 0.985 ? 255 : R() * 40;
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  return zeroGrain;
+}
+const rgbaOf = (rgb, a) => rgb.replace('rgb(', 'rgba(').replace(')', `,${a})`);
+
+draw.zero = (ctx, W, H, o, f) => {
+  drawBackground(ctx, W, H, o, f);
+  const diag = Math.hypot(W, H), cx = W / 2, cy = H / 2;
+  let mx = 0.5, inten = 0.4 + 0.6 * clamp(f.rms, 0, 1);
+  if (f.section) {
+    const cur = SECTION_LOOK[f.section.kind] || SECTION_LOOK.section;
+    let [m, it] = cur;
+    if (f.section.kind === 'build') { m = 0.5 + 0.5 * f.section.progress; it = 0.6 + 0.4 * f.section.progress; }
+    const prev = f.section.prev && (SECTION_LOOK[f.section.prev.kind] || SECTION_LOOK.section);
+    const k = clamp((f.t - f.section.t0) / 1.0, 0, 1);
+    if (prev) { m = prev[0] * (1 - k) + m * k; it = prev[1] * (1 - k) + it * k; }
+    mx = m; inten = it;
+  }
+  const base = mix(o.color1, o.color2, mx);
+  const s = o.sens;
+  ctx.save();
+  // section colour wash
+  ctx.globalCompositeOperation = 'soft-light';
+  ctx.fillStyle = rgbaOf(base, 0.55 * inten);
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'screen';
+  // vocal: warm light that drifts slowly
+  if (f.vocal > 0.01) {
+    const x = W * (0.5 + 0.28 * Math.sin(f.t * 0.31)), y = H * (0.32 + 0.12 * Math.cos(f.t * 0.23));
+    const g = ctx.createRadialGradient(x, y, 0, x, y, diag * 0.6);
+    const warm = mix(o.color2, '#ffd2a1', 0.45);
+    g.addColorStop(0, rgbaOf(warm, 0.42 * f.vocal * inten)); g.addColorStop(1, rgbaOf(warm, 0));
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+  // kick: bloom from the centre
+  if (f.kick > 0.01) {
+    const k = Math.min(1.3, f.kick * s);
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, diag * (0.4 + 0.2 * k));
+    g.addColorStop(0, rgba(o.color1, Math.min(0.85, 0.6 * k * inten)));
+    g.addColorStop(0.45, rgba(o.color1, 0.18 * k * inten));
+    g.addColorStop(1, rgba(o.color1, 0));
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+  // snare: glow at the edges
+  if (f.snare > 0.01) {
+    const k = Math.min(1.3, f.snare * s);
+    const g = ctx.createRadialGradient(cx, cy, diag * 0.18, cx, cy, diag * 0.62);
+    g.addColorStop(0, rgba(o.color2, 0)); g.addColorStop(1, rgba(o.color2, Math.min(0.9, 0.7 * k)));
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+  // hats: fine shimmer
+  if (f.hat > 0.02) {
+    ctx.globalAlpha = Math.min(0.8, 0.55 * f.hat * s);
+    const fr = Math.floor(f.t * 30);
+    const R = rng(fr);
+    ctx.translate(R() * 256, R() * 256);
+    ctx.fillStyle = ctx.createPattern(grainTile(), 'repeat');
+    ctx.fillRect(-256, -256, W + 512, H + 512);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+  }
+  // risers and impacts: white-out
+  if (f.sfx > 0.01) {
+    ctx.fillStyle = `rgba(255,255,255,${Math.min(0.75, 0.55 * f.sfx * f.sfx)})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+  ctx.restore();
+  // depth: soft vignette
+  const v = ctx.createRadialGradient(cx, cy, diag * 0.25, cx, cy, diag * 0.6);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, `rgba(0,0,0,${0.5 - 0.25 * inten})`);
+  ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+};

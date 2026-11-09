@@ -3,6 +3,7 @@ import './templates2.js';
 
 // Template gallery, grouped by style
 export const CATEGORIES = [
+  { id: 'base', items: ['zero'] },
   { id: 'circle', items: ['ring', 'dots', 'blob', 'ripples', 'hud', 'glitter'] },
   { id: 'line', items: ['wave', 'line', 'mountain', 'bars', 'led', 'surface'] },
   { id: 'space', items: ['warp', 'tunnel', 'shape', 'vortex', 'sphere', 'bubbles', 'kaleido'] },
