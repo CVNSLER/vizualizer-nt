@@ -77,29 +77,49 @@ async function loadModel(sources, file) {
   throw new Error('MODEL_DOWNLOAD ' + (lastErr?.message || ''));
 }
 
-async function loadOrt() {
+// ONNX Runtime: the full build (WebGPU + CPU) from the CDN when the page may fetch from it;
+// otherwise the CPU-only build whose .wasm is served next to the page (the web version).
+let gpuBuild = true;
+async function fetchBytes(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status}`);
+  return r.arrayBuffer();
+}
+async function loadOrt(local) {
   if (self.ort) return;
-  try { importScripts(ORT_BASE + 'ort.min.js'); } catch {
-    // module worker (dev server): no importScripts
-    self.ort = await import(/* @vite-ignore */ ORT_BASE + 'ort.min.mjs');
+  const tried = [];
+  let binary = null, base = ORT_BASE;
+  try { binary = await fetchBytes(ORT_BASE + 'ort-wasm-simd-threaded.jsep.wasm'); } catch (e) { tried.push('cdn ' + e.message); }
+  if (!binary && local) {
+    try { binary = await fetchBytes(local + 'ort-wasm-simd-threaded.wasm'); gpuBuild = false; base = local; } catch (e) { tried.push('local ' + e.message); }
   }
+  if (!binary) throw new Error('RUNTIME_DOWNLOAD ' + tried.join('; '));
+  const file = gpuBuild ? 'ort.min.js' : 'ort.wasm.min.js';
+  try { importScripts(ORT_BASE + file); } catch {
+    try { if (gpuBuild) throw 0; importScripts(base + file); } catch {
+      // module worker (dev server): no importScripts
+      self.ort = await import(/* @vite-ignore */ ORT_BASE + file.replace('.js', '.mjs'));
+    }
+  }
+  const glue = gpuBuild ? 'ort-wasm-simd-threaded.jsep.mjs' : 'ort-wasm-simd-threaded.mjs';
+  self.ort.env.wasm.wasmBinary = binary;
+  self.ort.env.wasm.wasmPaths = { mjs: (gpuBuild ? ORT_BASE : base) + glue };
 }
 
 async function makeSession(model, prefer) {
   const ort = self.ort;
-  ort.env.wasm.wasmPaths = ORT_BASE;
   ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 2) : 1;
   const tries = [];
-  if (prefer !== 'wasm' && self.navigator?.gpu) tries.push(['webgpu', 'wasm']);
+  if (gpuBuild && prefer !== 'wasm' && self.navigator?.gpu) tries.push(['webgpu', 'wasm']);
   tries.push(['wasm']);
-  let err;
+  const errs = [];
   for (const eps of tries) {
     try {
       const s = await ort.InferenceSession.create(new Uint8Array(model), { executionProviders: eps, graphOptimizationLevel: 'basic' });
       return { session: s, ep: eps[0] };
-    } catch (e) { err = e; }
+    } catch (e) { errs.push(`${eps[0]}: ${String(e?.message || e).slice(0, 160)}`); }
   }
-  throw err;
+  throw new Error(errs.join(' | '));
 }
 
 async function runSegment(session, L, R) {
@@ -134,10 +154,10 @@ async function runSegment(session, L, R) {
 
 self.onmessage = async (e) => {
   if (e.data.cmd === 'has') { const c = await idbGet(KEY); post({ type: 'has', has: !!(c && c.byteLength === MODEL_SIZE) }); return; }
-  const { L, R, sources, prefer, modelFile } = e.data;
+  const { L, R, sources, prefer, modelFile, ortLocal } = e.data;
   try {
     post({ type: 'progress', stage: 'runtime', p: 0 });
-    await loadOrt();
+    await loadOrt(ortLocal);
     const model = await loadModel(sources, modelFile);
     post({ type: 'progress', stage: 'init', p: 0 });
     let { session, ep } = await makeSession(model, prefer);

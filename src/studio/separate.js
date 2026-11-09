@@ -4,6 +4,8 @@ import SepWorker from './sepworker.js?worker&inline';
 export const STEMS = ['drums', 'bass', 'other', 'vocals'];
 const HF_URL = 'https://huggingface.co/timcsy/demucs-web-onnx/resolve/main/htdemucs_embedded.onnx';
 
+function ortLocal() { try { return new URL('ort/', document.baseURI).href; } catch { return null; } }
+
 async function resample(buffer, sr, channels = 2) {
   if (buffer.sampleRate === sr && buffer.numberOfChannels === channels) return buffer;
   const ctx = new OfflineAudioContext(channels, Math.ceil(buffer.duration * sr), sr);
@@ -45,7 +47,7 @@ export function separateStems(buffer, onProgress = () => {}, { prefer, modelFile
         else { worker.terminate(); reject(new Error(m.message)); }
       };
       worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message || 'worker error')); };
-      worker.postMessage({ L, R, sources: modelSources(), prefer, modelFile: model }, [L.buffer, R.buffer, ...(model ? [model] : [])]);
+      worker.postMessage({ L, R, sources: modelSources(), prefer, modelFile: model, ortLocal: ortLocal() }, [L.buffer, R.buffer, ...(model ? [model] : [])]);
     });
     if (cancelled) throw new Error('ABORTED');
     const sr = buffer.sampleRate, out = { ep: res.ep };
