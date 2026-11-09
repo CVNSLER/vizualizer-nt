@@ -28,9 +28,10 @@ function modelSources() {
  * at the original sample rate, plus `ep` ('webgpu' | 'wasm').
  * onProgress({ stage: 'runtime'|'download'|'init'|'separate', p, eta })
  */
-export function separateStems(buffer, onProgress = () => {}, { prefer } = {}) {
+export function separateStems(buffer, onProgress = () => {}, { prefer, modelFile } = {}) {
   let worker = null, cancelled = false;
   const promise = (async () => {
+    const model = modelFile ? await modelFile.arrayBuffer() : null;
     const b44 = await resample(buffer, 44100, 2);
     const L = Float32Array.from(b44.getChannelData(0)), R = Float32Array.from(b44.getChannelData(1));
     const res = await new Promise((resolve, reject) => {
@@ -44,7 +45,7 @@ export function separateStems(buffer, onProgress = () => {}, { prefer } = {}) {
         else { worker.terminate(); reject(new Error(m.message)); }
       };
       worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message || 'worker error')); };
-      worker.postMessage({ L, R, sources: modelSources(), prefer }, [L.buffer, R.buffer]);
+      worker.postMessage({ L, R, sources: modelSources(), prefer, modelFile: model }, [L.buffer, R.buffer, ...(model ? [model] : [])]);
     });
     if (cancelled) throw new Error('ABORTED');
     const sr = buffer.sampleRate, out = { ep: res.ep };
@@ -63,4 +64,16 @@ export function separateStems(buffer, onProgress = () => {}, { prefer } = {}) {
     return out;
   })();
   return { promise, cancel: () => { cancelled = true; worker?.terminate(); } };
+}
+
+export const MODEL_URL = HF_URL;
+export const MODEL_BYTES = 180534758;
+/** true when the model is already saved in this browser / app */
+export function modelSaved() {
+  return new Promise((resolve) => {
+    const w = new SepWorker();
+    w.onmessage = (e) => { if (e.data.type === 'has') { w.terminate(); resolve(e.data.has); } };
+    w.onerror = () => { w.terminate(); resolve(false); };
+    w.postMessage({ cmd: 'has' });
+  });
 }

@@ -95,11 +95,11 @@ export function useStudio({ audio, mixBuffer, audioRef, bpm, songKey }) {
   useEffect(() => () => engine.enable(false), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- actions
-  function separate(prefer) {
+  function separate(prefer, modelFile) {
     if (!songBuf) return;
     sepJob.current?.cancel();
     setSep({ status: 'running', stage: 'runtime', p: 0 });
-    const job = separateStems(songBuf, (m) => setSep((s) => (s.status === 'running' ? { ...s, ...(m.stage === 'ep' ? { ep: m.ep } : { stage: m.stage, p: m.p, eta: m.eta }) } : s)), { prefer });
+    const job = separateStems(songBuf, (m) => setSep((s) => (s.status === 'running' ? { ...s, ...(m.stage === 'ep' ? { ep: m.ep } : { stage: m.stage, p: m.p, eta: m.eta }) } : s)), { prefer, modelFile });
     sepJob.current = job;
     const t0 = performance.now();
     job.promise.then((r) => {

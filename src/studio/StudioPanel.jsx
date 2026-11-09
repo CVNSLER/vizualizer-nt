@@ -3,6 +3,7 @@ import { FX, FX_ORDER, FX_PARAMS, FX_PRESETS, makeFx } from './fx.js';
 import { CHANNELS, defaultStudio } from './smart.js';
 import { NOTE_NAMES, noteName, scaleOf, shiftCurve } from './pitch.js';
 import { AUTO_TUNE } from './useStudio.js';
+import { MODEL_URL, MODEL_BYTES, modelSaved } from './separate.js';
 
 const fmtDb = (v) => `${v > 0 ? '+' : ''}${(Math.round(v * 10) / 10).toFixed(1)} dB`;
 const fmtT = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
@@ -447,6 +448,16 @@ function PianoRoll({ S, track, notes, sel, setSel, scale, audioRef, onChange }) 
 function VocalTab({ S, studio, onSaveStem }) {
   const { sep, stems, st, setSt } = studio;
   const running = sep.status === 'running';
+  const [saved, setSaved] = useState(null);
+  const [fileErr, setFileErr] = useState(null);
+  useEffect(() => { modelSaved().then(setSaved); }, [stems]);
+  const dlFailed = sep.status === 'error' && /MODEL_DOWNLOAD/.test(sep.msg || '');
+  const pickModel = (f) => {
+    setFileErr(null);
+    if (!f) return;
+    if (f.size !== MODEL_BYTES) { setFileErr(S.modelWrong); return; }
+    studio.separate(undefined, f);
+  };
   const solo = (k) => setSt((s) => ({ ...s, stems: true, ch: Object.fromEntries(Object.entries(s.ch).map(([n, c]) => [n, { ...c, solo: k ? (k === 'minus' ? false : n === k) : false, mute: k === 'minus' ? n === 'vocals' : false }])) }));
   return (
     <div className="vocal-tab">
@@ -464,7 +475,22 @@ function VocalTab({ S, studio, onSaveStem }) {
           <small>{S.stage[sep.stage] || sep.stage} {Math.round((sep.p || 0) * 100)}%{sep.eta ? ` · ${S.left} ~${fmtT(sep.eta)}` : ''}{sep.ep ? ` · ${S.ep[sep.ep]}` : ''}</small>
         </div>
       )}
-      {sep.status === 'error' && <p className="err">{S.sepError} {sep.msg}</p>}
+      {sep.status === 'error' && <p className="err">{S.sepError} {dlFailed ? S.dlBlocked : sep.msg}</p>}
+      {saved === false && !running && (
+        <div className={`model-box ${dlFailed ? 'hot' : ''}`}>
+          <b>{S.modelManual}</b>
+          <ol>
+            <li>{S.modelStep1} <a href={MODEL_URL} target="_blank" rel="noreferrer">htdemucs_embedded.onnx</a> (180 MB)</li>
+            <li>{S.modelStep2}
+              <label className="btn"><input id="model-file" type="file" accept=".onnx" hidden onChange={(e) => pickModel(e.target.files[0])} />{S.modelPick}</label>
+            </li>
+          </ol>
+          <small className="hint">{S.modelStep3}</small>
+          <input className="txt" readOnly value={MODEL_URL} onFocus={(e) => e.target.select()} />
+          {fileErr && <p className="err">{fileErr}</p>}
+        </div>
+      )}
+      {saved && !stems && !running && <p className="ok">{S.modelReady}</p>}
       {stems && (
         <>
           <p id="sep-done" className="ok">{S.sepDone} · {Math.round(sep.secs || 0)} {S.secs} · {S.ep[stems.ep] || stems.ep}</p>

@@ -252,3 +252,11 @@ button.link { background: none; border: 0; color: var(--accent2); padding: 0; te
 .roll-canvas { max-height: 380px; overflow-y: auto; outline: none; }
 .roll-canvas canvas { display: block; cursor: ns-resize; touch-action: none; }
 @media (max-width: 860px) { .mixer-wrap { grid-template-columns: 1fr; } }
+
+.model-box { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
+.model-box.hot { border-color: #ffd166; }
+.model-box ol { margin: 8px 0; padding-left: 20px; }
+.model-box li { margin-bottom: 8px; }
+.model-box li .btn { margin-left: 8px; background: var(--panel2); border: 1px solid var(--accent); border-radius: 8px; padding: 5px 12px; cursor: pointer; display: inline-block; }
+.model-box a { color: var(--accent2); }
+.model-box .txt { margin-top: 6px; font-size: 12px; }

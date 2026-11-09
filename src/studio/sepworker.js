@@ -46,7 +46,13 @@ async function download(url, onBytes) {
 }
 
 // sources: [{ manifest: url }] (model split into parts next to the page) or [{ url }]
-async function loadModel(sources) {
+async function loadModel(sources, file) {
+  if (file) {
+    // the user picked the model file by hand (when the page may not download it itself)
+    if (file.byteLength !== MODEL_SIZE) throw new Error('MODEL_FILE_WRONG');
+    await idbPut(KEY, file);
+    return file;
+  }
   const cached = await idbGet(KEY);
   if (cached && cached.byteLength === MODEL_SIZE) return cached;
   let got = 0, lastErr = null;
@@ -127,11 +133,12 @@ async function runSegment(session, L, R) {
 }
 
 self.onmessage = async (e) => {
-  const { L, R, sources, prefer } = e.data;
+  if (e.data.cmd === 'has') { const c = await idbGet(KEY); post({ type: 'has', has: !!(c && c.byteLength === MODEL_SIZE) }); return; }
+  const { L, R, sources, prefer, modelFile } = e.data;
   try {
     post({ type: 'progress', stage: 'runtime', p: 0 });
     await loadOrt();
-    const model = await loadModel(sources);
+    const model = await loadModel(sources, modelFile);
     post({ type: 'progress', stage: 'init', p: 0 });
     let { session, ep } = await makeSession(model, prefer);
     post({ type: 'ep', ep });
