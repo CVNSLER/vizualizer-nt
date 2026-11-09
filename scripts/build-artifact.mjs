@@ -33,7 +33,3 @@ fs.mkdirSync('dist-artifact', { recursive: true });
 fs.writeFileSync('dist-artifact/vizualizator.html', out);
 console.log('dist-artifact/vizualizator.html', (out.length / 1024).toFixed(0), 'KB');
 
-// CPU build of ONNX Runtime served next to the page (the artifact sandbox may not fetch from CDNs)
-const ortDir = path.join('dist-artifact', 'ort');
-fs.mkdirSync(ortDir, { recursive: true });
-for (const f of ['ort-wasm-simd-threaded.wasm', 'ort-wasm-simd-threaded.mjs', 'ort.wasm.min.js']) fs.copyFileSync(path.join('node_modules/onnxruntime-web/dist', f), path.join(ortDir, f));

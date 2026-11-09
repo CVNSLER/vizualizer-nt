@@ -114,6 +114,9 @@ export function drawCover(ctx, img, x, y, w, h, zoom = 1) {
 // ---------------------------------------------------------------- background
 export function drawBackground(ctx, W, H, o, f, extra = {}) {
   ctx.save();
+  // templates may be scaled / moved / rotated (template settings): the background always fills the frame
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (f.realT != null) f = { ...f, t: f.realT };
   const media = mediaOf(o);
   if (media) {
     ctx.fillStyle = '#000';

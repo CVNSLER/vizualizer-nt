@@ -7,12 +7,13 @@ import { FONTS, loadFont, previewFont } from './fonts.js';
 import { FX_PRESETS, videoTimeAt, videoRateAt } from './videofx.js';
 import { runDeepAnalysis } from './deep/index.js';
 import AlgoPanel from './AlgoPanel.jsx';
-import OnePanel, { LayerEditor } from './OnePanel.jsx';
-import { autoLayers, MOODS, detectMood } from './one.js';
+import OnePanel from './OnePanel.jsx';
 import { wavBytes, mp3Bytes, saveAudio } from './audioexport.js';
-import { checkQuality, improveQuality, toWavUrl } from './quality/index.js';
+import { checkQuality, improveQuality, refineQuality, toWavUrl } from './quality/index.js';
 import { useStudio } from './studio/useStudio.js';
 import StudioPanel from './studio/StudioPanel.jsx';
+import TplSettings from './TplSettings.jsx';
+import { THEMES, THEME_KEYS, loadTheme, applyTheme } from './theme.js';
 
 const FORMATS = { '9:16': [9, 16], '1:1': [1, 1], '4:5': [4, 5], '16:9': [16, 9] };
 const QUALITIES = { '720p': 720, '1080p': 1080, '4K': 2160 };
@@ -36,7 +37,12 @@ function dims(format, short) {
 }
 
 function loadSettings() {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('viz-settings') || '{}') }; } catch { return DEFAULTS; }
+  try {
+    const v = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('viz-settings') || '{}') };
+    if (v.template === 'one') v.template = 'zero'; // template "1" was removed
+    delete v.layers; delete v.oneSeed; delete v.oneMood; delete v.oneMoodPick;
+    return v;
+  } catch { return DEFAULTS; }
 }
 
 function fileToImage(file) {
@@ -71,15 +77,39 @@ export default function App() {
   const [oneOpen, setOneOpen] = useState(false);
   const [folderOpen, setFolderOpenRaw] = useState(() => { try { return localStorage.getItem('viz-folder') === '1'; } catch { return false; } });
   const setFolderOpen = (f) => setFolderOpenRaw((v) => { const nv = typeof f === 'function' ? f(v) : f; try { localStorage.setItem('viz-folder', nv ? '1' : '0'); } catch { /* ignore */ } return nv; });
-  const [quality, setQuality] = useState({ status: 'idle' });
+  // quality: check result + history of enhanced versions (the active one is what "Yaxshilangan" plays)
+  const [quality, setQuality] = useState({ status: 'idle', history: [], active: -1 });
+  const enhanced = quality.history[quality.active] || null;
   const [qTarget, setQTarget] = useState(-14);
-  const [useEnhanced, setUseEnhancedRaw] = useState(false);
+  const [qSet, setQSetRaw] = useState(() => { try { return { strength: 1, level: 'standard', amt: {}, off: [], ...JSON.parse(localStorage.getItem('viz-quality') || '{}') }; } catch { return { strength: 1, level: 'standard', amt: {}, off: [] }; } });
+  const qDirty = useRef(false);
+  const setQSet = (fn) => { qDirty.current = true; setQSetRaw(fn); };
+  useEffect(() => { try { localStorage.setItem('viz-quality', JSON.stringify(qSet)); } catch { /* ignore */ } }, [qSet]);
+  const [useEnhanced, setUseEnhanced] = useState(false);
   const [studioOpen, setStudioOpen] = useState(false);
+  const [theme, setTheme] = useState(loadTheme);
+  useEffect(() => applyTheme(theme), [theme]);
+  const vocalsOf = () => audio?.analysis.deep?.vocals || [];
   const studio = useStudio({
-    audio, audioRef,
-    mixBuffer: audio ? (useEnhanced && quality.enhanced ? quality.enhanced.buffer : audio.buffer) : null,
-    bpm: audio?.analysis.deep?.bpm ?? audio?.analysis.bpm, songKey: audio?.analysis.deep?.key || null,
+    audio, audioRef, origBuf: audio?.buffer || null, enh: enhanced, useEnhanced,
+    bpm: audio?.analysis.deep?.bpm ?? audio?.analysis.bpm,
+    qKey: JSON.stringify([qTarget, qSet]),
+    enhanceFx: async (buffer, kind, onP) => {
+      let plan;
+      if (kind === 'fresh') plan = (await checkQuality(buffer, vocalsOf(), qTarget)).plan;
+      else plan = (quality.result || await checkQuality(audio.buffer, vocalsOf(), qTarget)).plan;
+      return improveQuality(buffer, { ...plan, target: qTarget, ...qSet }, vocalsOf(), onP);
+    },
   });
+  const audioSrc = audio ? studio.srcUrl || (useEnhanced && enhanced ? enhanced.url : audio.url) : null;
+  // switching what plays (original / enhanced / studio result) keeps the position and play state
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el || !audioSrc || el.src === audioSrc) return;
+    const t = el.currentTime, wasPlaying = !el.paused;
+    el.src = audioSrc;
+    el.addEventListener('loadedmetadata', () => { el.currentTime = Math.min(t, el.duration || t); if (wasPlaying) el.play().catch(() => {}); }, { once: true });
+  }, [audioSrc, audio]);
 
   useEffect(() => { try { localStorage.setItem('viz-settings', JSON.stringify(s)); } catch { /* ignore */ } }, [s]);
   useEffect(() => { try { localStorage.setItem('viz-lang', lang); } catch { /* ignore */ } }, [lang]);
@@ -147,7 +177,7 @@ export default function App() {
       const url = URL.createObjectURL(file);
       setAudio({ name: file.name, url, buffer, analysis });
       // deep "Algoritm" analysis runs in the background
-      setQuality({ status: 'idle' }); setUseEnhancedRaw(false);
+      setQuality((q) => { q.history.forEach((h) => URL.revokeObjectURL(h.url)); return { status: 'idle', history: [], active: -1 }; }); setUseEnhanced(false);
       deepJob.current?.cancel();
       setDeepStatus({ status: 'running', p: 0, stage: 'stft' });
       const job = runDeepAnalysis(buffer, (p, stage) => setDeepStatus((d) => (d.status === 'running' ? { ...d, p, stage } : d)));
@@ -188,61 +218,70 @@ export default function App() {
     if (key === 'bgImage') set('bgType', 'image');
   }
 
-  // ---- "1": quality check / enhancement / template builder
+  // ---- quality: check, enhance, re-check single stages, history
+  const vers = useRef(0);
   function runQualityCheck() {
     if (!audio) return;
-    setQuality({ status: 'running' });
-    checkQuality(audio.buffer, audio.analysis.deep?.vocals || [], qTarget)
-      .then((result) => setQuality({ status: 'done', result }))
-      .catch((e) => setQuality({ status: 'error', msg: e.message }));
+    setQuality((q) => ({ ...q, status: 'running' }));
+    checkQuality(audio.buffer, vocalsOf(), qTarget)
+      .then((result) => setQuality((q) => ({ ...q, status: 'done', result })))
+      .catch((e) => setQuality((q) => ({ ...q, status: 'error', msg: e.message })));
   }
-  // main-panel "Yaxshilangan": check + improve in one go when nothing has been prepared yet
+  // keep at most 8 versions; the newest becomes active
+  function pushVersion(v) {
+    setQuality((q) => {
+      let h = [...q.history, { ...v, id: ++vers.current, url: toWavUrl(v.buffer), at: Date.now() }];
+      while (h.length > 8) { URL.revokeObjectURL(h[0].url); h = h.slice(1); }
+      return { ...q, status: 'done', history: h, active: h.length - 1, enhancing: false, refining: null, note: null };
+    });
+    setUseEnhanced(true);
+  }
+  async function ensureResult() {
+    if (quality.result) return quality.result;
+    setQuality((q) => ({ ...q, status: 'running' }));
+    const result = await checkQuality(audio.buffer, vocalsOf(), qTarget);
+    setQuality((q) => ({ ...q, status: 'done', result }));
+    return result;
+  }
+  async function improve(settings = qSet, label = 'base') {
+    if (!audio) return;
+    try {
+      const result = await ensureResult();
+      setQuality((q) => ({ ...q, enhancing: true, p: 0, note: null }));
+      const r = await improveQuality(audio.buffer, { ...result.plan, target: qTarget, ...settings }, vocalsOf(), (p) => setQuality((q) => ({ ...q, p })));
+      pushVersion({ ...r, kind: label, settings });
+    } catch (e) { setQuality((q) => ({ ...q, enhancing: false, status: 'error', msg: e.message })); }
+  }
   async function pickEnhanced() {
     if (!audio) return;
-    if (quality.enhanced) { setUseEnhanced(true); return; }
+    if (enhanced) { setUseEnhanced(true); return; }
+    await improve();
+  }
+  // look again at the active version: only `only` (one stage), or everything that is still off
+  async function refineActive(only = null) {
+    if (!enhanced) return;
     try {
-      let result = quality.result;
-      if (!result) {
-        setQuality({ status: 'running' });
-        result = await checkQuality(audio.buffer, audio.analysis.deep?.vocals || [], qTarget);
-        setQuality({ status: 'done', result });
-      }
-      setQuality((q) => ({ ...q, status: 'done', result, enhancing: true, p: 0 }));
-      const r = await improveQuality(audio.buffer, { ...result.plan, target: qTarget }, audio.analysis.deep?.vocals || [], (p) => setQuality((q) => ({ ...q, p })));
-      setQuality((q) => ({ ...q, enhancing: false, enhanced: { ...r, url: toWavUrl(r.buffer) } }));
-      setUseEnhanced(true);
-    } catch (e) {
-      setQuality((q) => ({ ...q, enhancing: false, status: 'error', msg: e.message }));
-    }
+      setQuality((q) => ({ ...q, enhancing: true, p: 0, note: null, refining: only || 'all' }));
+      const r = await refineQuality(enhanced.buffer, { target: qTarget, only, level: qSet.level }, vocalsOf(), (p) => setQuality((q) => ({ ...q, p })));
+      if (r.improved) pushVersion({ ...r, kind: only ? `restart:${only}` : 'again', settings: qSet });
+      else setQuality((q) => ({ ...q, enhancing: false, refining: null, note: { kind: 'same', only } }));
+    } catch (e) { setQuality((q) => ({ ...q, enhancing: false, refining: null, status: 'error', msg: e.message })); }
   }
+  function setActiveVersion(i) { setQuality((q) => ({ ...q, active: i })); setUseEnhanced(true); }
+  // stage switches, amounts, strength and level re-run the enhancement 1.5 s after the last change
+  useEffect(() => {
+    if (!qDirty.current || !quality.history.length) return undefined;
+    const t = setTimeout(() => { qDirty.current = false; improve(qSet, 'base'); }, 1500);
+    return () => clearTimeout(t);
+  }, [qSet]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function runImprove() {
-    if (!audio || !quality.result) return;
-    setQuality((q) => ({ ...q, enhancing: true, p: 0 }));
-    improveQuality(audio.buffer, { ...quality.result.plan, target: qTarget }, audio.analysis.deep?.vocals || [], (p) => setQuality((q) => ({ ...q, p })))
-      .then((r) => {
-        if (quality.enhanced?.url) URL.revokeObjectURL(quality.enhanced.url);
-        setQuality((q) => ({ ...q, enhancing: false, enhanced: { ...r, url: toWavUrl(r.buffer) } }));
-        setUseEnhanced(true);
-      })
-      .catch((e) => setQuality((q) => ({ ...q, enhancing: false, status: 'error', msg: e.message })));
-  }
-  // switch A/B without losing the playback position
-  function setUseEnhanced(v) {
-    const el = audioRef.current;
-    if (el) {
-      const t = el.currentTime, wasPlaying = !el.paused;
-      el.addEventListener('loadedmetadata', () => { el.currentTime = t; if (wasPlaying) el.play().catch(() => {}); }, { once: true });
-    }
-    setUseEnhancedRaw(v);
-  }
   async function saveMusic(fmt) {
     const useStudioMix = studio.active && exp.musicStudio !== false;
     if (useStudioMix) setExp((x) => ({ ...x, musicBusy: T.preparing, musicDone: null, error: null }));
-    const buf = useStudioMix ? await studio.render() : exp.musicEnh && quality.enhanced ? quality.enhanced.buffer : audio.buffer;
+    const buf = (useStudioMix && await studio.render()) || (exp.musicEnh && enhanced ? enhanced.buffer : audio.buffer);
     const start = exp.whole ? 0 : Math.max(0, +exp.from);
     const end = exp.whole ? buf.duration : Math.min(buf.duration, Math.max(start + 1, +exp.to));
-    const base = audio.name.replace(/\.[^.]+$/, '') + (useStudioMix ? '_studiya' : exp.musicEnh && quality.enhanced ? '_yaxshilangan' : '');
+    const base = audio.name.replace(/\.[^.]+$/, '') + (useStudioMix ? '_studiya' : exp.musicEnh && enhanced ? '_yaxshilangan' : '');
     try {
       setExp((x) => ({ ...x, musicBusy: T.preparing, musicDone: null, error: null }));
       const bytes = fmt === 'wav' ? wavBytes(buf, start, end)
@@ -252,27 +291,6 @@ export default function App() {
     } catch (e) {
       setExp((x) => x && ({ ...x, musicBusy: null, error: String(e.message || e) }));
     }
-  }
-
-  async function saveStem(k) {
-    const st = studio.stems;
-    if (!st) return;
-    let buf = st[k];
-    if (k === 'minus') {
-      buf = new AudioBuffer({ numberOfChannels: 2, length: st.vocals.length, sampleRate: st.vocals.sampleRate });
-      for (let c = 0; c < 2; c++) {
-        const o = buf.getChannelData(c);
-        for (const n of ['drums', 'bass', 'other']) { const d = st[n].getChannelData(c); for (let i = 0; i < o.length; i++) o[i] += d[i]; }
-      }
-    }
-    const base = audio.name.replace(/\.[^.]+$/, '');
-    try { await saveAudio(wavBytes(buf), `${base}_${k}.wav`, T.saveAs); } catch (e) { setNotice(`${T.error} ${e.message}`); }
-  }
-
-  function buildOne(variant = false) {
-    const seed = variant ? (s.oneSeed || 1) + 1 : (s.oneSeed || 1);
-    const { layers, mood } = autoLayers(audio?.analysis?.deep || null, options, seed, s.oneMoodPick && s.oneMoodPick !== 'auto' ? s.oneMoodPick : null);
-    setS((p) => ({ ...p, template: 'one', layers, oneSeed: seed, oneMood: mood }));
   }
 
   const togglePlayRef = useRef(null);
@@ -309,7 +327,7 @@ export default function App() {
     window.__vizExporting = true;
     try {
       await Promise.all([loadFont(s.titleFont), loadFont(s.subFont)]);
-      const audioBuffer = studio.active ? await studio.render() : useEnhanced && quality.enhanced ? quality.enhanced.buffer : audio.buffer;
+      const audioBuffer = (studio.active && await studio.render()) || (useEnhanced && enhanced ? enhanced.buffer : audio.buffer);
       const { data } = await exportVideo({
         width: w, height: h, fps: +exp.fps, start, end, options, analysis: audio.analysis, audioBuffer,
         signal: ctrl.signal,
@@ -354,8 +372,8 @@ export default function App() {
               <span className="sub">{T.soundVersion}</span>
               <div className="seg">
                 <button className={!useEnhanced ? 'on' : ''} onClick={() => setUseEnhanced(false)}>{T.original}</button>
-                <button className={useEnhanced && quality.enhanced ? 'on' : ''} onClick={pickEnhanced} disabled={!!quality.enhancing || quality.status === 'running'}>
-                  {T.enhanced}{quality.enhanced ? ` · ${quality.result?.score ?? ''}→${quality.enhanced.score}` : ''}
+                <button className={useEnhanced && enhanced ? 'on' : ''} onClick={pickEnhanced} disabled={!!quality.enhancing || quality.status === 'running'}>
+                  {T.enhanced}{enhanced ? ` · ${quality.result?.score ?? ''}→${enhanced.score}` : ''}
                 </button>
               </div>
               {(quality.enhancing || quality.status === 'running') && (
@@ -370,7 +388,7 @@ export default function App() {
           </button>
           <button id="one-btn" className="algo-btn" onClick={() => { setOneOpen(true); if (quality.status === 'idle') runQualityCheck(); }} disabled={!audio}>
             <b>{T.oneBtn}</b>
-            <small>{quality.status === 'running' ? T.qualityRunning : quality.result ? `${T.scoreLabel}: ${quality.enhanced ? `${quality.result.score} → ${quality.enhanced.score}` : quality.result.score}` : T.oneHint}{useEnhanced && quality.enhanced ? ` · ${T.enhanced}` : ''}</small>
+            <small>{quality.status === 'running' ? T.qualityRunning : quality.result ? `${T.scoreLabel}: ${enhanced ? `${quality.result.score} → ${enhanced.score}` : quality.result.score}` : T.oneHint}{useEnhanced && enhanced ? ` · ${T.enhanced}` : ''}</small>
           </button>
           <button id="studio-btn" className="algo-btn" onClick={() => { studio.resume(); setStudioOpen(true); }} disabled={!audio}>
             <b>{T.studioBtn}</b>
@@ -382,7 +400,7 @@ export default function App() {
           <button className={`tpl tpl-none ${s.template === 'none' ? 'on' : ''}`} onClick={() => set('template', 'none')}>{T.tplNone}</button>
           <p className="hint">{T.tplOffHint}</p>
           {(() => {
-            const pickTpl = (k) => { if (k === 'one' && s.template !== 'one' && !s.layers?.length) buildOne(); else set('template', s.template === k ? 'none' : k); };
+            const pickTpl = (k) => set('template', s.template === k ? 'none' : k);
             const tplBtn = (k) => (
               <button key={k} className={`tpl ${s.template === k ? 'on' : ''}`} onClick={() => pickTpl(k)} title={s.template === k ? T.tplOffHint : ''}>{T.tpl[k]}</button>
             );
@@ -411,16 +429,7 @@ export default function App() {
               </>
             );
           })()}
-          {s.template === 'one' && (
-            <div className="one-inline">
-              <div className="q-actions">
-                <button className="primary" onClick={buildOne} disabled={!audio}>{T.buildNow}</button>
-                <button onClick={() => buildOne(true)} disabled={!s.layers?.length}>{T.variant}</button>
-              </div>
-              {s.oneMood && <p className="hint">{T.moodLabel}: <b>{T.moodNames[s.oneMood]}</b> · {audio?.analysis?.deep?.bpm ?? '—'} BPM</p>}
-              <LayerEditor T={T} layers={s.layers} onChange={(layers) => set('layers', layers)} />
-            </div>
-          )}
+          <TplSettings T={T} s={s} setS={setS} />
           {SHAPED.includes(s.template) && (
             <div className="seg" style={{ marginTop: 10 }}>
               {[0, 3, 4, 6].map((n) => (
@@ -508,18 +517,6 @@ export default function App() {
           </div>
         </Section>
 
-        <Section title={T.colors}>
-          <div className="palettes" aria-label={T.palette}>
-            {PALETTES.map(([a, b]) => (
-              <button key={a + b} className="pal" style={{ background: `linear-gradient(135deg, ${a} 50%, ${b} 50%)` }}
-                onClick={() => setS((p) => ({ ...p, color1: a, color2: b }))} />
-            ))}
-          </div>
-          <Color label={T.color1} value={s.color1} onChange={(v) => set('color1', v)} />
-          <Color label={T.color2} value={s.color2} onChange={(v) => set('color2', v)} />
-          <Range label={T.sensitivity} min={0.3} max={2} step={0.05} value={s.sens} onChange={(v) => set('sens', v)} />
-        </Section>
-
         <Section title={T.text}>
           <input className="txt" placeholder={T.title} value={s.title} onChange={(e) => set('title', e.target.value)} />
           <input className="txt" placeholder={T.subtitle} value={s.subtitle} onChange={(e) => set('subtitle', e.target.value)} />
@@ -554,6 +551,19 @@ export default function App() {
             </>
           )}
         </Section>
+        <Section title={T.design}>
+          <div className="chips theme-chips">
+            {Object.entries(THEMES).map(([k, v]) => (
+              <button key={k} id={`theme-${k}`} className={theme.preset === k ? 'on' : ''} onClick={() => setTheme({ ...v, preset: k })}>
+                <i style={{ background: `linear-gradient(135deg, ${v.accent} 50%, ${v.accent2} 50%)`, borderColor: v.bg }} /> {T.themes[k]}
+              </button>
+            ))}
+          </div>
+          {THEME_KEYS.map((k) => (
+            <label key={k} className="row">{T.themeKeys[k]}<input id={`theme-c-${k}`} type="color" value={theme[k]} onChange={(e) => setTheme((t) => ({ ...t, [k]: e.target.value, preset: 'custom' }))} /></label>
+          ))}
+          <button onClick={() => setTheme({ ...THEMES.violet, preset: 'violet' })}>{T.st.resetAll}</button>
+        </Section>
       </aside>
 
       <main className="stage">
@@ -570,21 +580,19 @@ export default function App() {
           <span className="time">{fmtTime(dur)}</span>
           <button className="primary" onClick={openExport}>{T.export}</button>
         </div>
-        {audio && <audio ref={audioRef} loop src={useEnhanced && quality.enhanced ? quality.enhanced.url : audio.url} />}
+        {audio && <audio ref={audioRef} loop />}
       </main>
 
       {oneOpen && (
-        <OnePanel T={T} hasAudio={!!audio} deepReady={deepStatus.status === 'done'} quality={quality}
-          onCheck={runQualityCheck} onImprove={runImprove} target={qTarget} setTarget={setQTarget}
+        <OnePanel T={T} hasAudio={!!audio} quality={quality} enhanced={enhanced}
+          onCheck={runQualityCheck} onImprove={() => improve()} onRefine={refineActive} onPickVersion={setActiveVersion}
+          target={qTarget} setTarget={setQTarget} qSet={qSet} setQSet={setQSet}
           useEnhanced={useEnhanced} setUseEnhanced={setUseEnhanced}
-          onBuild={() => buildOne()} onVariant={() => buildOne(true)} layers={s.layers} setLayers={(layers) => set('layers', layers)}
-          mood={s.oneMood} detected={audio?.analysis?.deep ? detectMood(audio.analysis.deep) : null} moodPick={s.oneMoodPick || 'auto'}
-          setMoodPick={(v) => set('oneMoodPick', v)} moods={MOODS}
           onClose={() => setOneOpen(false)} />
       )}
       {studioOpen && audio && (
-        <StudioPanel T={T} studio={studio} audioRef={audioRef} songKey={audio.analysis.deep?.key || null}
-          playing={playing} onTogglePlay={togglePlay} onSaveStem={saveStem} onClose={() => setStudioOpen(false)} />
+        <StudioPanel T={T} studio={studio} playing={playing} onTogglePlay={togglePlay}
+          hasEnhanced={!!enhanced} enhancing={!!quality.enhancing} onEnhance={pickEnhanced} onClose={() => setStudioOpen(false)} />
       )}
       {algoOpen && (
         <AlgoPanel T={T} deep={audio?.analysis?.deep} status={deepStatus} audioRef={audioRef} onClose={() => setAlgoOpen(false)} />
@@ -622,7 +630,7 @@ export default function App() {
                   {studio.active && (
                     <label className="check"><input type="checkbox" checked={exp.musicStudio !== false} onChange={(e) => setExp({ ...exp, musicStudio: e.target.checked })} /> {T.studioBtn}</label>
                   )}
-                  {quality.enhanced && (
+                  {enhanced && (
                     <div className="seg">
                       <button className={!exp.musicEnh ? 'on' : ''} onClick={() => setExp({ ...exp, musicEnh: false })}>{T.original}</button>
                       <button className={exp.musicEnh ? 'on' : ''} onClick={() => setExp({ ...exp, musicEnh: true })}>{T.enhanced}</button>

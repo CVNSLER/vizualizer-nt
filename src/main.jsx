@@ -2,6 +2,9 @@ import { Component } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import './styles.css';
+import { applyTheme, loadTheme } from './theme.js';
+
+applyTheme(loadTheme()); // before the first paint, so the app never flashes in the default colours
 
 // If anything in the app crashes, show the reason and a way out instead of a blank screen.
 class Guard extends Component {

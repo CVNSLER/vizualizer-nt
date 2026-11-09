@@ -1,5 +1,4 @@
 // Offline helpers for the studio: level statistics, spectral noise reduction, true-peak limiter.
-import { fft } from './fft.js';
 
 /** Level statistics used by the smart mixer. */
 export function levelStats(chs, fs) {
@@ -28,64 +27,6 @@ export function levelStats(chs, fs) {
     loudDb: 10 * Math.log10(loud + 1e-12),
     lowFrac: all > 0 ? lo / all : 0,
   };
-}
-
-/**
- * Spectral noise reduction (for a voice or a noisy recording).
- * Noise is learned from the quietest 10 % of frames, then removed with a smoothed Wiener gain.
- * strength 0..1
- */
-export function denoise(c, fs, strength = 0.5) {
-  const N = 2048, H = 512, n = c.length;
-  const win = new Float32Array(N).map((_, i) => 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N));
-  const frames = Math.max(0, Math.floor((n - N) / H) + 1);
-  if (frames < 8) return Float32Array.from(c);
-  const K = N / 2 + 1;
-  // pass 1: frame energies + spectra of all frames (magnitudes only)
-  const energy = new Float32Array(frames);
-  const re = new Float64Array(N), im = new Float64Array(N);
-  for (let f = 0; f < frames; f++) {
-    let e = 0; const s = f * H;
-    for (let i = 0; i < N; i += 4) e += c[s + i] * c[s + i];
-    energy[f] = e;
-  }
-  const order = Array.from(energy.keys()).sort((a, b) => energy[a] - energy[b]);
-  const quiet = order.slice(0, Math.max(4, Math.floor(frames * 0.1))).filter((f) => energy[f] > 0 || true);
-  const noise = new Float64Array(K);
-  for (const f of quiet) {
-    const s = f * H;
-    for (let i = 0; i < N; i++) { re[i] = c[s + i] * win[i]; im[i] = 0; }
-    fft(re, im);
-    for (let k = 0; k < K; k++) noise[k] += re[k] * re[k] + im[k] * im[k];
-  }
-  for (let k = 0; k < K; k++) noise[k] /= quiet.length;
-  // pass 2: Wiener gain with over-subtraction, gain floor and decision-directed smoothing
-  const over = 1 + 2.5 * strength, floor = 10 ** (-(6 + 18 * strength) / 20);
-  const out = new Float32Array(n), norm = new Float32Array(n);
-  const prevS = new Float64Array(K);
-  const gPrev = new Float64Array(K).fill(1);
-  for (let f = 0; f < frames; f++) {
-    const s = f * H;
-    for (let i = 0; i < N; i++) { re[i] = c[s + i] * win[i]; im[i] = 0; }
-    fft(re, im);
-    for (let k = 0; k < K; k++) {
-      const P = re[k] * re[k] + im[k] * im[k];
-      const post = P / (noise[k] * over + 1e-20);
-      const prio = 0.96 * (prevS[k] / (noise[k] * over + 1e-20)) + 0.04 * Math.max(0, post - 1);
-      let g = prio / (1 + prio);
-      g = Math.max(floor, g);
-      // smooth the gain over time (less "musical noise")
-      g = g > gPrev[k] ? 0.6 * g + 0.4 * gPrev[k] : 0.85 * g + 0.15 * gPrev[k];
-      gPrev[k] = g;
-      prevS[k] = g * g * P;
-      re[k] *= g; im[k] *= g;
-      if (k > 0 && k < N / 2) { re[N - k] *= g; im[N - k] *= g; }
-    }
-    fft(re, im, true);
-    for (let i = 0; i < N; i++) { out[s + i] += (re[i] / N) * win[i]; norm[s + i] += win[i] * win[i]; }
-  }
-  for (let i = 0; i < n; i++) out[i] = norm[i] > 1e-3 ? out[i] / norm[i] : c[i] * floor;
-  return out;
 }
 
 /**

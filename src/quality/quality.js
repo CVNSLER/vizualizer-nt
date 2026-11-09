@@ -1,3 +1,4 @@
+import { STAGES } from './stages.js';
 // "Algoritm 1": listens to a mix, finds technical problems and fixes the ones that can be fixed.
 //
 // Measures: integrated loudness + loudness range (ITU-R BS.1770-4 / EBU R128), sample and
@@ -541,42 +542,61 @@ function envelope(x, fs, attS, relS) {
 }
 function rmsOf(x) { let s = 0; for (let i = 0; i < x.length; i += 4) s += x[i] * x[i]; return Math.sqrt(s / (x.length / 4)) + 1e-9; }
 
+// amount of one stage: 0 = off, 1 = automatic, up to 2 = stronger. plan.strength scales them all.
+const blend = (a, b, k) => { if (k === 1) return b; const y = new Float32Array(a.length); for (let i = 0; i < a.length; i++) y[i] = a[i] + (b[i] - a[i]) * k; return y; };
+
 export function enhance(chs, fs, plan, onProgress = () => {}) {
   let out = chs.map((c) => Float32Array.from(c));
   const stereo = out.length > 1;
   const stages = [];
   const n = out[0].length;
+  const strength = clamp(plan.strength ?? 1, 0, 1);
+  const A = (id) => (plan.off?.includes(id) ? 0 : clamp(plan.amt?.[id] ?? 1, 0, 2)) * strength;
+  const high = plan.level === 'high';
+  // where the tonal balance started: with strength < 100 % the loops only go part of the way
+  const keep = 1 - Math.min(1, (plan.off?.includes('tonalLoop') ? 0 : clamp(plan.amt?.tonalLoop ?? 1, 0, 1)) * strength);
+  let third0 = null, oct0 = null;
+  if (keep > 0.001) {
+    const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a += c[i]; mono[i] = a / out.length; }
+    third0 = thirdOctDev(mono, fs); oct0 = tonal(spectrum(mono, fs).oct).dev;
+  }
+  const aim3 = (i) => (third0 ? third0[i] * keep : 0), aimO = (i) => (oct0 ? oct0[i] * keep : 0);
 
   // 0. repair: rebuild clipped peaks, then remove steady hiss
-  if (plan.declip) {
+  if (plan.declip && A('declip') > 0) {
     let rep = 0;
-    out = out.map((c) => { const r = declip(c); rep += r.repaired; return r.y; });
+    out = out.map((c) => { const r = declip(c); rep += r.repaired; return blend(c, r.y, Math.min(1, A('declip'))); });
     if (rep) stages.push('declip');
   }
-  if (plan.denoise) {
+  if (plan.denoise && A('denoise') > 0) {
     const mono0 = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a += c[i]; mono0[i] = a / out.length; }
     const prof = noiseProfile(mono0, 2);
-    out = out.map((c) => denoise(c, fs, prof));
+    out = out.map((c) => blend(c, denoise(c, fs, prof), Math.min(1, A('denoise'))));
     stages.push('denoise');
   }
   onProgress(0.04);
 
   // 1. DC + rumble: 4th-order high-pass
-  out = out.map((c) => lr4(c, 'hp', fs, plan.highpass));
-  stages.push('highpass');
+  if (A('highpass') > 0) {
+    out = out.map((c) => lr4(c, 'hp', fs, plan.highpass));
+    stages.push('highpass');
+  }
   onProgress(0.06);
 
   // 2. tonal balance: 10-band match to a modern reference
-  for (const e of plan.eq) {
-    const k = e.f < 40 ? coeffs('lshelf', fs, 45, 0.7071, e.gain) : e.f > 12000 ? coeffs('hshelf', fs, 12000, 0.7071, e.gain) : coeffs('peak', fs, e.f, 1.0, e.gain);
+  const aEq = A('tonalEq');
+  for (const e of aEq > 0 ? plan.eq : []) {
+    const g = e.gain * aEq;
+    const k = e.f < 40 ? coeffs('lshelf', fs, 45, 0.7071, g) : e.f > 12000 ? coeffs('hshelf', fs, 12000, 0.7071, g) : coeffs('peak', fs, e.f, 1.0, g);
     out = out.map((c) => filt(c, k));
   }
-  if (plan.eq.length) stages.push('tonalEq');
+  if (plan.eq.length && aEq > 0) stages.push('tonalEq');
   onProgress(0.14);
 
   // 3. dynamic EQ: tame mud (300 Hz) and harshness (3.5 kHz) only when they jump out.
   //    Detection on the mono sum, same gain on both channels (keeps the stereo image).
-  if (plan.dynEq) {
+  if (plan.dynEq && A('dynEq') > 0) {
+    const aD = A('dynEq');
     for (const [f, q, maxCut] of [[300, 1.1, 0.45], [3500, 1.3, 0.5]]) {
       const kb = coeffs('bp', fs, f, q);
       const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a += c[i]; mono[i] = a / out.length; }
@@ -586,7 +606,7 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
       ratios.sort((a2, b2) => a2 - b2);
       const typ = ratios[Math.floor(ratios.length * 0.6)] || 0.2;
       const red = new Float32Array(n);
-      for (let i = 0; i < n; i++) { const r = env[i] / (full[i] + 1e-9) / (typ + 1e-9); red[i] = r > 1.4 ? Math.min(maxCut, (r - 1.4) * 0.5) : 0; }
+      for (let i = 0; i < n; i++) { const r = env[i] / (full[i] + 1e-9) / (typ + 1e-9); red[i] = r > 1.4 ? Math.min(Math.min(0.9, maxCut * aD), (r - 1.4) * 0.5 * aD) : 0; }
       out = out.map((c) => { const b = filt(c, kb), y = new Float32Array(n); for (let i = 0; i < n; i++) y[i] = c[i] - b[i] * red[i]; return y; });
     }
     stages.push('dynEq');
@@ -595,14 +615,15 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
 
   // 4. 3-band compressor (crossovers 150 Hz / 4 kHz), gentle 2:1 above each band's own level.
   //    Gains come from the mono sum and are shared by both channels.
-  if (plan.multiband) {
+  if (plan.multiband && A('multiband') > 0) {
+    const aM = A('multiband');
     const split = (c) => { const low = lr4(c, 'lp', fs, 150), high = lr4(c, 'hp', fs, 4000), mid = new Float32Array(n); for (let i = 0; i < n; i++) mid[i] = c[i] - low[i] - high[i]; return [low, mid, high]; };
     const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a += c[i]; mono[i] = a / out.length; }
     const mb = split(mono);
     const times = [[0.012, 0.18], [0.006, 0.1], [0.002, 0.06]];
     const gains = mb.map((b, k) => {
       const env = envelope(b, fs, times[k][0], times[k][1]), thr = rmsOf(b) * 1.8, g = new Float32Array(n);
-      for (let i = 0; i < n; i++) g[i] = env[i] > thr ? Math.sqrt(thr / env[i]) : 1;
+      for (let i = 0; i < n; i++) g[i] = env[i] > thr ? (thr / env[i]) ** (0.5 * aM) : 1;
       return g;
     });
     out = out.map((c) => { const bs = split(c), y = new Float32Array(n); for (let k = 0; k < 3; k++) for (let i = 0; i < n; i++) y[i] += bs[k][i] * gains[k][i]; return y; });
@@ -611,22 +632,24 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
   onProgress(0.4);
 
   // 5. glue (only for very wide dynamics)
-  if (plan.glue) {
+  if (plan.glue && A('glue') > 0) {
+    const aG = A('glue');
     const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a = Math.max(a, Math.abs(c[i])); mono[i] = a; }
     const env = envelope(mono, fs, 0.03, 0.3), thr = rmsOf(mono) * 1.4;
-    for (let i = 0; i < n; i++) { const g = env[i] > thr ? (thr / env[i]) ** 0.5 : 1; for (const c of out) c[i] *= g; }
+    for (let i = 0; i < n; i++) { const g = env[i] > thr ? (thr / env[i]) ** (0.5 * aG) : 1; for (const c of out) c[i] *= g; }
     stages.push('glue');
   }
 
   // 6. punch: transient shaper (fast vs slow envelope), up to +3.5 dB on attacks
-  if (plan.punch) {
+  if (plan.punch && A('punch') > 0) {
+    const aP = A('punch');
     const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a += c[i]; mono[i] = a / out.length; }
     const fast = envelope(mono, fs, 0.0008, 0.03), slow = envelope(mono, fs, 0.02, 0.2);
     const g = new Float32Array(n);
     let sm = 1;
     const k = Math.exp(-1 / (0.002 * fs));
     for (let i = 0; i < n; i++) {
-      const tgt = 1 + clamp((fast[i] / (slow[i] + 1e-9) - 1) * 0.5, 0, 0.5);
+      const tgt = 1 + clamp((fast[i] / (slow[i] + 1e-9) - 1) * 0.5, 0, 0.5) * aP;
       sm = k * sm + (1 - k) * tgt; g[i] = sm;
     }
     for (const c of out) for (let i = 0; i < n; i++) c[i] *= g[i];
@@ -635,29 +658,30 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
   onProgress(0.5);
 
   // 7. stereo: mono low end, a little more width above 3 kHz when the mix is narrow
-  if (stereo) {
+  if (stereo && A('stereo') > 0) {
+    const aS = Math.min(1.5, A('stereo'));
     const [L, R] = out;
     const S = new Float32Array(n); for (let i = 0; i < n; i++) S[i] = (L[i] - R[i]) / 2;
     const sLow = lr4(S, 'lp', fs, 120);
     const sHigh = plan.width ? lr4(S, 'hp', fs, 3000) : null;
     for (let i = 0; i < n; i++) {
-      const d = -sLow[i] + (sHigh ? sHigh[i] * 0.3 : 0);
+      const d = (-sLow[i] + (sHigh ? sHigh[i] * 0.3 : 0)) * Math.min(1, aS);
       L[i] += d; R[i] -= d;
     }
     stages.push(plan.width ? 'stereoWide' : 'monoBass');
-    if (plan.pseudoStereo) {
+    if (plan.pseudoStereo && A('pseudoStereo') > 0) {
       const M = new Float32Array(n); for (let i = 0; i < n; i++) M[i] = (L[i] + R[i]) / 2;
       let d = lr4(M, 'hp', fs, 1500);
       for (const f of [700, 1900, 4300, 9100]) d = filt(d, coeffs('ap', fs, f, 0.6));
-      for (let i = 0; i < n; i++) { const v = d[i] * 0.28; L[i] += v; R[i] -= v; }
+      for (let i = 0; i < n; i++) { const v = d[i] * 0.28 * A('pseudoStereo'); L[i] += v; R[i] -= v; }
       stages.push('pseudoStereo');
     }
   }
   onProgress(0.58);
 
   // 8. exciter: soft harmonics above 5 kHz when the top end is dull, stronger the duller it is
-  if (plan.exciter) {
-    const amt = plan.exciterAmount || 0.35;
+  if (plan.exciter && A('exciter') > 0) {
+    const amt = (plan.exciterAmount || 0.35) * A('exciter');
     const src = amt > 0.8 ? 2000 : 3000;
     out = out.map((c) => {
       const h = lr4(c, 'hp', fs, src);
@@ -671,27 +695,29 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
   onProgress(0.64);
 
   // 8b. bandwidth extension: when the top was cut off, rebuild it from harmonics of 1.5-6 kHz
-  if (plan.bwe) {
+  if (plan.bwe && A('bwe') > 0) {
+    const aB = A('bwe');
     out = out.map((c) => {
       const band = lr4(lr4(c, 'hp', fs, 1500), 'lp', fs, 6000);
       const rect = new Float32Array(n);
       let mean = 0; for (let i = 0; i < n; i++) mean += Math.abs(band[i]); mean /= n;
       for (let i = 0; i < n; i++) rect[i] = Math.abs(band[i]) - mean + Math.tanh(band[i] * 6) / 6;
       const hi = lr4(lr4(rect, 'hp', fs, 5000), 'hp', fs, 5000);
-      const y = new Float32Array(n); for (let i = 0; i < n; i++) y[i] = c[i] + hi[i] * 0.9;
+      const y = new Float32Array(n); for (let i = 0; i < n; i++) y[i] = c[i] + hi[i] * 0.9 * aB;
       return y;
     });
     stages.push('bwe');
   }
 
   // 9. de-esser
-  if (plan.deess) {
+  if (plan.deess && A('deess') > 0) {
+    const aDs = A('deess');
     const k1 = coeffs('hp', fs, 5000), k2 = coeffs('lp', fs, 9000);
     out = out.map((c) => {
       const b = filt(filt(c, k1), k2);
       const env = envelope(b, fs, 0.002, 0.06), full = envelope(c, fs, 0.002, 0.06);
       const y = new Float32Array(n);
-      for (let i = 0; i < n; i++) { const r = env[i] / (full[i] + 1e-9); y[i] = c[i] - b[i] * (r > 0.35 ? Math.min(0.6, (r - 0.35) * 1.5) : 0); }
+      for (let i = 0; i < n; i++) { const r = env[i] / (full[i] + 1e-9); y[i] = c[i] - b[i] * (r > 0.35 ? Math.min(Math.min(0.9, 0.6 * aDs), (r - 0.35) * 1.5 * aDs) : 0); }
       return y;
     });
     stages.push('deess');
@@ -699,15 +725,18 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
   onProgress(0.7);
 
   // 9b. closed loop on 1/3-octave bands: measure, correct what is left, measure again (3 passes)
-  if (plan.eq.length || plan.multiband) {
+  const aL = A('tonalLoop');
+  if ((plan.eq.length || plan.multiband || plan.forceLoop) && aL > 0) {
     const hiCap = plan.exciter || plan.bwe ? 6 : 2.5;
-    for (let pass = 0; pass < 3; pass++) {
+    // "high" quality: more passes, a smaller dead zone, finer filters
+    const dead = high ? 0.15 : 0.5, step = high ? 0.9 : 0.85, passes = high ? 6 : 3;
+    for (let pass = 0; pass < passes; pass++) {
       const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a += c[i]; mono[i] = a / out.length; }
-      const dev = thirdOctDev(mono, fs);
+      const dev = thirdOctDev(mono, fs).map((v, i) => v - aim3(i));
       // smooth across neighbours so we never carve narrow notches
       const sm = dev.map((v, i) => 0.25 * (dev[i - 1] ?? v) + 0.5 * v + 0.25 * (dev[i + 1] ?? v));
-      const fix = THIRD.map((f, i) => ({ f, gain: clamp(-Math.sign(sm[i]) * Math.max(0, Math.abs(sm[i]) - 0.5) * 0.85, -3, f >= 6000 ? hiCap : 2.5) }))
-        .filter((e) => Math.abs(e.gain) >= 0.2);
+      const fix = THIRD.map((f, i) => ({ f, gain: clamp(-Math.sign(sm[i]) * Math.max(0, Math.abs(sm[i]) - dead) * step, -3, f >= 6000 ? hiCap : 2.5) }))
+        .filter((e) => Math.abs(e.gain) >= (high ? 0.08 : 0.2));
       if (!fix.length) break;
       for (const e of fix) {
         const k = e.f < 45 ? coeffs('lshelf', fs, 50, 0.7071, e.gain) : e.f > 14000 ? coeffs('hshelf', fs, 13000, 0.7071, e.gain) : coeffs('peak', fs, e.f, 2.2, e.gain);
@@ -715,10 +744,10 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
       }
     }
     // last pass on the octave bands the score is measured on
-    for (let pass = 0; pass < 2; pass++) {
+    for (let pass = 0; pass < (high ? 5 : 2); pass++) {
       const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a += c[i]; mono[i] = a / out.length; }
-      const td = tonal(spectrum(mono, fs).oct).dev;
-      const fix = OCT.map((f, i) => ({ f, gain: clamp(-td[i] * 0.85, -2, f >= 6000 ? hiCap : 2) })).filter((e) => Math.abs(e.gain) >= 0.2);
+      const td = tonal(spectrum(mono, fs).oct).dev.map((v, i) => v - aimO(i));
+      const fix = OCT.map((f, i) => ({ f, gain: clamp(-td[i] * step, -2, f >= 6000 ? hiCap : 2) })).filter((e) => Math.abs(e.gain) >= (high ? 0.05 : 0.2));
       if (!fix.length) break;
       for (const e of fix) {
         const k = e.f < 40 ? coeffs('lshelf', fs, 45, 0.7071, e.gain) : e.f > 12000 ? coeffs('hshelf', fs, 12000, 0.7071, e.gain) : coeffs('peak', fs, e.f, 1.0, e.gain);
@@ -786,24 +815,111 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
     return res;
   };
   const before = loudness(out, fs).I;
-  let gDb = plan.target - before;
+  // the loudness moves toward the target as far as the strength says (0 % = keep the level)
+  const aLd = Math.min(1, A('loudness'));
+  const goal = before + (plan.target - before) * aLd;
+  let gDb = goal - before;
   let res = limited(out, gDb);
   onProgress(0.85);
   const got = loudness(res, fs).I;
-  // up to two more passes until the loudness lands within 0.1 LU of the target
+  // more passes until the loudness lands within 0.1 LU (0.05 LU in high quality) of the goal
   let lastGot = got;
-  for (let pass = 0; pass < 2 && Math.abs(lastGot - plan.target) > 0.1; pass++) {
-    gDb += clamp(plan.target - lastGot, -3, 3);
+  const tol = high ? 0.05 : 0.1;
+  for (let pass = 0; pass < (high ? 4 : 2) && Math.abs(lastGot - goal) > tol; pass++) {
+    gDb += clamp(goal - lastGot, -3, 3);
     res = limited(out, gDb);
     lastGot = loudness(res, fs).I;
   }
+  // high quality: the limiter changes the balance a little; measure the result and correct what is
+  // left on the pre-limiter signal, then limit again (closed loop through the whole tail)
+  if (high && aL > 0 && (plan.eq.length || plan.multiband || plan.forceLoop)) {
+    const hiCap2 = plan.exciter || plan.bwe ? 6 : 2.5;
+    for (let it = 0; it < 3; it++) {
+      const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of res) a += c[i]; mono[i] = a / res.length; }
+      const td = tonal(spectrum(mono, fs).oct).dev.map((v, i) => v - aimO(i));
+      if (Math.max(...td.map(Math.abs)) < 0.12) break;
+      const fix = OCT.map((f, i) => ({ f, q: 1.0, gain: clamp(-td[i] * 0.7, -1.5, f >= 6000 ? hiCap2 : 1.5) })).filter((e) => Math.abs(e.gain) >= 0.04);
+      for (const e of fix) {
+        const k = e.f < 40 ? coeffs('lshelf', fs, 45, 0.7071, e.gain) : e.f > 12000 ? coeffs('hshelf', fs, 12000, 0.7071, e.gain) : coeffs('peak', fs, e.f, e.q, e.gain);
+        out = out.map((c) => filt(c, k));
+      }
+      res = limited(out, gDb);
+      lastGot = loudness(res, fs).I;
+      for (let pass = 0; pass < 3 && Math.abs(lastGot - goal) > tol; pass++) {
+        gDb += clamp(goal - lastGot, -3, 3);
+        res = limited(out, gDb);
+        lastGot = loudness(res, fs).I;
+      }
+    }
+  }
   out = res;
-  stages.push('loudness');
+  if (aLd > 0) stages.push('loudness');
   onProgress(0.97);
   for (const c of out) for (let i = 0; i < n; i++) c[i] = clamp(c[i], -1, 1);
   return { chs: out, stages };
 }
 
-export { BANDS };
+export { BANDS, STAGES };
+
+// ---------------------------------------------------------------- re-check and refine
+// The metric each stage is responsible for (lower = better).
+export function stageMetric(id, m, target) {
+  const top = (Math.abs(Math.min(0, m.tonal.dev[8])) + Math.abs(Math.min(0, m.tonal.dev[9]))) / 2;
+  switch (id) {
+    case 'declip': return m.clips;
+    case 'denoise': return m.hiss ? m.hiss.ratioDb : -99;
+    case 'tonalEq': case 'tonalLoop': case 'highpass': return m.tonal.error;
+    case 'dynEq': return Math.max(0, m.tonal.dev[3] + m.tonal.dev[4]) + Math.max(0, m.tonal.dev[6] + m.tonal.dev[7]);
+    case 'multiband': case 'glue': return m.lra;
+    case 'punch': return -m.crest;
+    case 'stereo': case 'pseudoStereo': return 1 - m.corrLow;
+    case 'exciter': case 'bwe': return top;
+    case 'deess': return m.sibilanceDb;
+    case 'loudness': return Math.abs(m.lufs - target) + Math.max(0, m.truePeakDb + 1);
+    default: return m.tonal.error;
+  }
+}
+
+/**
+ * Plan for a second look at audio that was already improved: only what is still wrong is fixed
+ * (or only `only`, forced on). Loudness is always re-aimed so the level stays on target.
+ */
+export function refinePlan(m, target, only = null, level = 'standard') {
+  const d = diagnose(m, target);
+  const has = (id) => d.issues.some((i) => i.id === id);
+  const want = new Set(['loudness']);
+  if (m.clips > 20) want.add('declip');
+  if (d.plan.denoise) want.add('denoise');
+  if (m.tonal.error > 0.3) { want.add('tonalEq'); want.add('tonalLoop'); }
+  if (has('mud') || has('harsh')) want.add('dynEq');
+  if (has('sibilance')) want.add('deess');
+  if (d.plan.exciter) want.add('exciter');
+  if (d.plan.bwe) want.add('bwe');
+  if (has('wideDynamics')) want.add('glue');
+  if (has('wideBass')) want.add('stereo');
+  const use = only ? new Set([only, 'loudness']) : want;
+  const plan = {
+    ...d.plan, target, level,
+    declip: use.has('declip'), denoise: use.has('denoise'), dynEq: use.has('dynEq'), deess: use.has('deess'),
+    exciter: use.has('exciter'), exciterAmount: d.plan.exciterAmount || 0.35, bwe: use.has('bwe'),
+    glue: use.has('glue'), punch: use.has('punch'), multiband: use.has('multiband'),
+    width: false, pseudoStereo: false, forceLoop: use.has('tonalLoop') || use.has('tonalEq'),
+    eq: use.has('tonalEq') ? d.plan.eq : [],
+  };
+  plan.off = STAGES.filter((id) => !use.has(id) && !(id === 'tonalLoop' && use.has('tonalEq')));
+  return { plan, stages: [...use], score: d.score };
+}
+
+export function refine(chs, fs, { target = -14, only = null, level = 'standard', vocals = [] } = {}, onProgress) {
+  const m0 = analyseQuality(chs, fs, vocals);
+  const { plan, score: s0 } = refinePlan(m0, target, only, level);
+  const res = enhance(chs, fs, plan, onProgress);
+  const m1 = analyseQuality(res.chs, fs, vocals);
+  const d1 = diagnose(m1, target);
+  const checks = only ? [only] : ['tonalEq', 'loudness', ...(plan.denoise ? ['denoise'] : []), ...(plan.declip ? ['declip'] : [])];
+  const gains = checks.map((id) => stageMetric(id, m0, target) - stageMetric(id, m1, target));
+  const improved = d1.score > s0 || (d1.score >= s0 && gains.some((g) => g > 0.05) && gains.every((g) => g > -0.05));
+  return { chs: res.chs, stages: res.stages, before: m0, after: m1, scoreBefore: s0, ...d1, improved, gains: Object.fromEntries(checks.map((id, i) => [id, gains[i]])) };
+}
 // exposed for the measurement scripts
 export const _dsp = { declip, denoise, noiseProfile };

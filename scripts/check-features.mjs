@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 
 const read = (p) => fs.readFileSync(new URL('../' + p, import.meta.url), 'utf8');
-const consumers = ['src/templates.js', 'src/templates2.js', 'src/one.js', 'src/videofx.js', 'src/palette.js', 'src/catalog.js'];
+const consumers = ['src/templates.js', 'src/templates2.js', 'src/videofx.js', 'src/catalog.js'];
 const used = new Set();
 for (const file of consumers) for (const m of read(file).matchAll(/\bf\.([a-zA-Z_]+)/g)) used.add(m[1]);
 
@@ -17,7 +17,9 @@ const producers = {
 const has = (src, k) => new RegExp(`(^|[\\s{,])${k}\\s*[:,}]|\\.\\.\\.`).test(src) && new RegExp(`(^|[\\s{,])${k}(\\s*:|\\s*,|\\s*}|\\s*$)`, 'm').test(src);
 
 let bad = 0;
-for (const k of [...used].sort()) for (const [name, src] of Object.entries(producers)) {
+// optional fields: set only by renderFrame for template settings, read with a fallback
+const OPTIONAL = new Set(['realT']);
+for (const k of [...used].sort().filter((x) => !OPTIONAL.has(x))) for (const [name, src] of Object.entries(producers)) {
   if (!has(src, k)) { console.error(`missing feature "${k}" in ${name}`); bad++; }
 }
 console.log(`feature contract: ${used.size} fields checked, ${bad} missing`);

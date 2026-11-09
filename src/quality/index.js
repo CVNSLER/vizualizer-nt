@@ -29,6 +29,15 @@ export async function improveQuality(buffer, plan, vocals, onProgress) {
   return { buffer: out, after: res.after, issues: res.issues, score: res.score, stages: res.stages };
 }
 
+export async function refineQuality(buffer, opts, vocals, onProgress) {
+  const chs = channels(buffer);
+  const res = await run({ cmd: 'refine', chs, fs: buffer.sampleRate, opts, vocals }, chs.map((c) => c.buffer), onProgress);
+  const ctx = new OfflineAudioContext(res.chs.length, res.chs[0].length, buffer.sampleRate);
+  const out = ctx.createBuffer(res.chs.length, res.chs[0].length, buffer.sampleRate);
+  res.chs.forEach((c, i) => out.copyToChannel(c, i));
+  return { ...res, chs: undefined, buffer: out };
+}
+
 // 16-bit WAV for playback in the <audio> element
 export function toWavUrl(buffer) {
   const ch = buffer.numberOfChannels, n = buffer.length, sr = buffer.sampleRate;

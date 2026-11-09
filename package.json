@@ -15,14 +15,12 @@
     "check": "node scripts/check-features.mjs"
   },
   "dependencies": {
-    "demucs-web": "1.0.2",
     "mp4-muxer": "5.2.2"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "5.1.4",
     "electron": "38.2.0",
     "electron-builder": "26.0.12",
-    "onnxruntime-web": "1.22.0",
     "react": "19.1.1",
     "react-dom": "19.1.1",
     "vite": "7.1.7"

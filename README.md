@@ -10,13 +10,15 @@ Musiqa vizualizatori — Windows uchun ilova (o‘zbekcha / русский).
   - **Kosmos va 3D:** Yulduzli tunnel, Neon tunnel, Neon shakl, Girdob, Simli shar, Pufakchalar, Kaleydoskop
   - **Retro:** Synthwave, Plastinka, Kasseta, Yurak urishi, Radar
   - **Promo va rasm:** Albom promo, Podkast, Glitch, Rasm titrashi
-- Tayyor rang palitralari, muqova rasmi, vaqt hisoblagichi, matn joylashuvi
-- '1' shablonida 248 ta effekt: 29 ta GPU kadr filtri (glfx.js asosida + o'zimizniki), 208 ta gl-transitions zarb o'tishi va 11 ta ustki effekt; rasmda ham, videoda ham ishlaydi. Litsenziyalar: THIRD_PARTY_NOTICES.md
+- Har bir shablonning o‘z sozlamalari: ranglar, hajm, nur, chiziq qalinligi, animatsiya tezligi, sezgirlik, zarbda kattalashish, joylashuv, burilish, aylanish, ko‘zgu
+- Muqova rasmi, vaqt hisoblagichi, matn joylashuvi
+- **Sifat va yaxshilash**: kamchiliklarni topish va yaxshilash; Standart / **Yuqori** daraja, kuch slayderi (0–100%),
+  har bir o‘zgarishni yoqish/o‘chirish va kuchini sozlash, har bir bosqich uchun ↻ qayta ko‘rib chiqish, «Qayta yaxshilash», versiyalar tarixi
 - **Studiya** (Musiqa bo‘limidagi tugma):
-  - *Mikser* — kanal faderlari, panorama, M/S; **aqlli rejim**: ovoz ko‘tarilganda limiter (−1 dBTP), kompressor, bass, tembr, effektlar miqdori o‘zi moslashadi
-  - *Effektlar* — ovozni tozalash, ekvalayzer, kompressor, de-esser, saturatsiya, xorus, delay (temp bo‘yicha), reverb, stereo kenglik, filtr + 8 ta tayyor to‘plam
-  - *Notalar* — Melodyne uslubida: notalarni avto aniqlash (YIN + HMM), avto tuzatish (markaz/tebranish/tolerantlik, lad avto), pianino-roll’da qo‘lda tahrir; TD-PSOLA formantlarni saqlaydi
-  - *Vokal ajratish* — HTDemucs (Meta AI) bilan vokal / barabanlar / bass / boshqa; WebGPU yoki CPU, model bir marta yuklanadi
+  - *Mikser* — Musiqa va Master faderlari (0.1 dB qadam, 3 soniyadan keyin qo‘llanadi), panorama; **aqlli rejim**: ovoz ko‘tarilganda limiter (−1 dBTP, oldinga qarovchi), kompressor, bass, tembr, effektlar miqdori o‘zi moslashadi
+  - *Parametrik ekvalayzer* — 8 polosa, jonli spektr, nuqtalarni sichqoncha bilan surish, «yoqimsiz tovushni topish» rejimi
+  - *Effektlar* — 3 panel: asliga (keyin yaxshilash), yaxshilanganiga, effektlardan keyin yaxshilash; ekvalayzer, kompressor, de-esser, saturatsiya, xorus, delay (temp bo‘yicha), reverb, stereo kenglik, filtr + 10 ta yoqib-o‘chiriladigan tayyor to‘plam (Bassboost bilan)
+- Ilova dizayni: 7 ta tayyor rang mavzusi (yorug‘ mavzu ham) yoki o‘z ranglaringiz
 - Formatlar: 9:16, 1:1, 4:5, 16:9
 - Fon: gradient, rang, rasm yoki **video** (qoraytirish, xiralashtirish)
 - Sarlavha, kichik matn, logotip, vaqt chizig‘i
@@ -24,9 +26,9 @@ Musiqa vizualizatori — Windows uchun ilova (o‘zbekcha / русский).
 
 ## Windows uchun yuklab olish
 GitHub’dagi **Actions → Windows build** bo‘limida eng oxirgi muvaffaqiyatli buildni oching va
-**Vizualizator-Windows** faylini yuklab oling. Ichida ikkita fayl bor:
-- `Vizualizator Setup 1.0.0.exe` — o‘rnatuvchi
-- `Vizualizator 1.0.0.exe` — o‘rnatmasdan ishlaydigan (portable) versiya
+**Vizualizator-v1.0-Windows** faylini yuklab oling. Ichida ikkita fayl bor:
+- `Vizualizator v1.0 Setup 1.0.0.exe` — o‘rnatuvchi
+- `Vizualizator v1.0 1.0.0.exe` — o‘rnatmasdan ishlaydigan (portable) versiya
 
 ## Dasturchilar uchun
 ```bash

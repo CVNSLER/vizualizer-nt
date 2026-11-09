@@ -78,35 +78,17 @@ function impulse(ctx, type, decay, damp) {
   return buf;
 }
 
+// tanh saturation; louder drive = rounding starts earlier
 function satCurve(drive) {
-  const n = 2048, c = new Float32Array(n), k = Math.max(1, dB(drive));
-  const norm = Math.tanh(k);
-  for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = Math.tanh(k * x) / norm; }
+  // gain set so a typical level (0.3, about -10 dBFS) passes unchanged; louder parts get rounded
+  const n = 4097, c = new Float32Array(n), k = Math.max(1, dB(drive)), g = 0.3 / Math.tanh(0.3 * k);
+  for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = Math.tanh(k * x) * g; }
   return c;
 }
 
 // ---------------------------------------------------------------- effect definitions
 // p = parameters, env = { bpm, smart: { satScale, wetScale } }
 export const FX = {
-  clean: {
-    // offline part (spectral noise reduction) is done on the buffer; this graph removes hum and rumble
-    defaults: { strength: 0.5, hum: 0, rumble: true },
-    build(ctx) {
-      const input = stereo(ctx.createGain()), hp = ctx.createBiquadFilter();
-      hp.type = 'highpass'; hp.Q.value = -3.0103;
-      const notches = [1, 2, 3, 4].map(() => { const f = ctx.createBiquadFilter(); f.type = 'notch'; f.Q.value = 30; return f; });
-      input.connect(hp); let last = hp;
-      for (const f of notches) { last.connect(f); last = f; }
-      return {
-        input, output: last,
-        update(p) {
-          set(hp.frequency, p.rumble ? 75 : 10, ctx);
-          // no hum: the filters become all-pass (they change nothing you can hear)
-          notches.forEach((f, i) => { f.type = p.hum ? 'notch' : 'allpass'; set(f.frequency, p.hum ? p.hum * (i + 1) : 1000, ctx); set(f.Q, p.hum ? 30 : 0.1, ctx); });
-        },
-      };
-    },
-  },
   eq: {
     defaults: { hp: 20, low: 0, lowMid: 0, mid: 0, presence: 0, air: 0 },
     build(ctx) {
@@ -167,8 +149,11 @@ export const FX = {
     build(ctx) {
       const input = stereo(ctx.createGain()), out = ctx.createGain(), dry = ctx.createGain(), wet = ctx.createGain();
       const ws = ctx.createWaveShaper(); ws.oversample = '4x';
+      // the dry path goes through a linear shaper with the same oversampling, so both paths have
+      // the same small delay and mixing them does not comb-filter
+      const lin = ctx.createWaveShaper(); lin.oversample = '4x'; lin.curve = new Float32Array([-1, 1]);
       const tone = ctx.createBiquadFilter(); tone.type = 'lowpass';
-      input.connect(dry).connect(out);
+      input.connect(lin).connect(dry).connect(out);
       input.connect(ws).connect(tone).connect(wet).connect(out);
       let lastDrive = null;
       return {
@@ -263,30 +248,31 @@ export const FX = {
     },
   },
   width: {
+    // mid/side: S_out = S*k + HP(S)*(w-k); the low side part is S - HP(S), so with w = k = 1 the
+    // output equals the input exactly (no crossover notch). monoBass: k = 0 (side below 150 Hz removed)
     defaults: { width: 1.3, monoBass: true },
     build(ctx) {
       const input = stereo(ctx.createGain()), out = ctx.createGain();
       const split = ctx.createChannelSplitter(2), merge = ctx.createChannelMerger(2);
-      // M/S on the highs; below 150 Hz either mono or untouched
-      const lowL = ctx.createBiquadFilter(), lowR = ctx.createBiquadFilter(); lowL.type = lowR.type = 'lowpass';
-      const hiL = ctx.createBiquadFilter(), hiR = ctx.createBiquadFilter(); hiL.type = hiR.type = 'highpass';
-      for (const b of [lowL, lowR, hiL, hiR]) { b.frequency.value = 150; b.Q.value = -3.0103; }
-      const g = { ll: ctx.createGain(), lr: ctx.createGain(), rl: ctx.createGain(), rr: ctx.createGain() };
-      const bl = { ll: ctx.createGain(), lr: ctx.createGain(), rl: ctx.createGain(), rr: ctx.createGain() };
+      const g = (v) => { const n = ctx.createGain(); n.gain.value = v; return n; };
+      const mid = g(1), side = g(1);
       input.connect(split);
-      split.connect(hiL, 0); split.connect(hiR, 1); split.connect(lowL, 0); split.connect(lowR, 1);
-      hiL.connect(g.ll).connect(merge, 0, 0); hiL.connect(g.lr).connect(merge, 0, 1);
-      hiR.connect(g.rl).connect(merge, 0, 0); hiR.connect(g.rr).connect(merge, 0, 1);
-      lowL.connect(bl.ll).connect(merge, 0, 0); lowL.connect(bl.lr).connect(merge, 0, 1);
-      lowR.connect(bl.rl).connect(merge, 0, 0); lowR.connect(bl.rr).connect(merge, 0, 1);
+      split.connect(g(0.5), 0).connect(mid); split.connect(g(0.5), 1).connect(mid);
+      split.connect(g(0.5), 0).connect(side); split.connect(g(-0.5), 1).connect(side);
+      const hp = () => { const b = ctx.createBiquadFilter(); b.type = 'highpass'; b.frequency.value = 150; b.Q.value = -3.0103; return b; };
+      const h1 = hp(), h2 = hp();
+      side.connect(h1).connect(h2);
+      const sK = g(1), sH = g(0), sOut = g(1), neg = g(-1);
+      side.connect(sK).connect(sOut);
+      h2.connect(sH).connect(sOut);
+      mid.connect(merge, 0, 0); mid.connect(merge, 0, 1);
+      sOut.connect(merge, 0, 0); sOut.connect(neg).connect(merge, 0, 1);
       merge.connect(out);
       return {
         input, output: out,
         update(p) {
-          const w = p.width, a = (1 + w) / 2, b = (1 - w) / 2;
-          set(g.ll.gain, a, ctx); set(g.rr.gain, a, ctx); set(g.lr.gain, b, ctx); set(g.rl.gain, b, ctx);
-          const la = p.monoBass ? 0.5 : 1, lb = p.monoBass ? 0.5 : 0;
-          set(bl.ll.gain, la, ctx); set(bl.rr.gain, la, ctx); set(bl.lr.gain, lb, ctx); set(bl.rl.gain, lb, ctx);
+          const k = p.monoBass ? 0 : 1;
+          set(sK.gain, k, ctx); set(sH.gain, p.width - k, ctx);
         },
       };
     },
@@ -301,28 +287,32 @@ export const FX = {
   },
 };
 
-export const FX_ORDER = ['clean', 'eq', 'deess', 'comp', 'saturate', 'chorus', 'delay', 'reverb', 'width', 'filter'];
+export const FX_ORDER = ['eq', 'deess', 'comp', 'saturate', 'chorus', 'delay', 'reverb', 'width', 'filter'];
 
 // ready-made chains
+// ready-made chains; clicking a preset again removes exactly the effects it added
 export const FX_PRESETS = {
-  vocalPolish: [
-    { type: 'clean', p: { strength: 0.35, hum: 0, rumble: true } },
-    { type: 'eq', p: { hp: 90, low: -1, lowMid: -2, mid: 0, presence: 2.5, air: 3 } },
-    { type: 'deess', p: { freq: 6500, threshold: -32, amount: 6 } },
-    { type: 'comp', p: { threshold: -20, ratio: 3, attack: 8, release: 120, makeup: true } },
-    { type: 'reverb', p: { type: 'plate', decay: 1.6, predelay: 30, damp: 8000, mix: 0.18 } },
+  bassboost: [
+    { type: 'eq', p: { hp: 25, low: 6, lowMid: -1.5, mid: 0, presence: 0.5, air: 0 } },
+    { type: 'saturate', p: { drive: 4, tone: 7000, mix: 0.18 } },
+    { type: 'comp', p: { threshold: -12, ratio: 1.8, attack: 30, release: 120, makeup: true } },
   ],
-  bigHall: [{ type: 'reverb', p: { type: 'hall', decay: 3.2, predelay: 35, damp: 6500, mix: 0.35 } }],
-  echo: [{ type: 'delay', p: { sync: '1/8.', ms: 350, feedback: 0.4, tone: 4500, pingpong: true, mix: 0.3 } }],
-  radio: [{ type: 'eq', p: { hp: 300, low: -6, lowMid: 0, mid: 4, presence: 3, air: -8 } }, { type: 'saturate', p: { drive: 8, tone: 5000, mix: 0.4 } }],
+  clarity: [
+    { type: 'eq', p: { hp: 25, low: 0, lowMid: -1.5, mid: 0, presence: 1.5, air: 2 } },
+    { type: 'comp', p: { threshold: -14, ratio: 1.6, attack: 20, release: 150, makeup: true } },
+  ],
+  bigHall: [{ type: 'reverb', p: { type: 'hall', decay: 3.2, predelay: 35, damp: 6500, mix: 0.3 } }],
+  room: [{ type: 'reverb', p: { type: 'room', decay: 0.9, predelay: 10, damp: 8000, mix: 0.2 } }],
+  echo: [{ type: 'delay', p: { sync: '1/8.', ms: 350, feedback: 0.35, tone: 4500, pingpong: true, mix: 0.22 } }],
+  wide: [{ type: 'width', p: { width: 1.5, monoBass: true } }],
+  warm: [{ type: 'saturate', p: { drive: 6, tone: 9000, mix: 0.3 } }, { type: 'eq', p: { hp: 20, low: 1, lowMid: 0.5, mid: 0, presence: -0.5, air: -1 } }],
+  club: [{ type: 'eq', p: { hp: 25, low: 3, lowMid: -1.5, mid: 0, presence: 1, air: 2 } }, { type: 'comp', p: { threshold: -16, ratio: 2.5, attack: 25, release: 90, makeup: true } }, { type: 'width', p: { width: 1.3, monoBass: true } }],
   lofi: [{ type: 'filter', p: { type: 'lowpass', freq: 3800, q: 0.7 } }, { type: 'saturate', p: { drive: 10, tone: 4000, mix: 0.5 } }, { type: 'chorus', p: { rate: 0.4, depth: 6, mix: 0.35 } }],
-  club: [{ type: 'eq', p: { hp: 25, low: 3, lowMid: -1.5, mid: 0, presence: 1, air: 2 } }, { type: 'comp', p: { threshold: -16, ratio: 2.5, attack: 25, release: 90, makeup: true } }, { type: 'width', p: { width: 1.35, monoBass: true } }],
-  phone: [{ type: 'filter', p: { type: 'bandpass', freq: 1600, q: 1.2 } }, { type: 'saturate', p: { drive: 12, tone: 3500, mix: 0.6 } }],
-  wide: [{ type: 'width', p: { width: 1.6, monoBass: true } }, { type: 'chorus', p: { rate: 0.6, depth: 3, mix: 0.2 } }],
+  radio: [{ type: 'eq', p: { hp: 300, low: -6, lowMid: 0, mid: 4, presence: 3, air: -8 } }, { type: 'saturate', p: { drive: 8, tone: 5000, mix: 0.4 } }],
 };
 
 let uid = 0;
-export function makeFx(type, p) { return { id: `fx${Date.now().toString(36)}${uid++}`, type, on: true, p: { ...FX[type].defaults, ...(p || {}) } }; }
+export function makeFx(type, p, preset = null) { return { id: `fx${Date.now().toString(36)}${uid++}`, type, on: true, preset, p: { ...FX[type].defaults, ...(p || {}) } }; }
 
 /** Build a chain on ctx: input -> fx... -> output. Returns { input, output, update(list, env), nodes, dispose } */
 export function buildChain(ctx, list, env) {
@@ -349,7 +339,6 @@ export const chainKey = (list) => list.filter((f) => f.on && FX[f.type]).map((f)
 
 // controls for the UI: [key, kind, min, max, step, unit]  (kind: 'r' range, 'log' log range, 'b' bool, 's' select)
 export const FX_PARAMS = {
-  clean: [['strength', 'r', 0, 1, 0.05, '%'], ['hum', 's', [0, 50, 60]], ['rumble', 'b']],
   eq: [['hp', 'log', 20, 400, 1, 'Hz'], ['low', 'r', -12, 12, 0.5, 'dB'], ['lowMid', 'r', -12, 12, 0.5, 'dB'], ['mid', 'r', -12, 12, 0.5, 'dB'], ['presence', 'r', -12, 12, 0.5, 'dB'], ['air', 'r', -12, 12, 0.5, 'dB']],
   comp: [['threshold', 'r', -50, 0, 1, 'dB'], ['ratio', 'r', 1, 12, 0.1, ':1'], ['attack', 'log', 0.5, 100, 0.5, 'ms'], ['release', 'log', 20, 800, 5, 'ms'], ['makeup', 'b']],
   deess: [['freq', 'log', 3000, 10000, 50, 'Hz'], ['threshold', 'r', -50, 0, 1, 'dB'], ['amount', 'r', 0, 12, 0.5, '']],
