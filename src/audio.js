@@ -212,7 +212,12 @@ export function sample(an, t) {
   let lastBeat = null;
   for (let i = an.beats.length - 1; i >= 0; i--) if (an.beats[i].t <= t) { lastBeat = an.beats[i]; break; }
   const sinceBeat = lastBeat ? t - lastBeat.t : 99;
-  const bw = (dt) => an.bassWave[Math.max(0, Math.min(an.bassWave.length - 1, Math.floor((t + dt) * 600)))];
+  // linear interpolation between the 600 Hz samples so drawn waves are smooth
+  const lerpAt = (arr, x) => {
+    const p = Math.max(0, Math.min(arr.length - 1.001, x * 600)), i = Math.floor(p), k = p - i;
+    return arr[i] * (1 - k) + arr[i + 1] * k;
+  };
+  const bw = (dt) => lerpAt(an.bassWave, t + dt);
   return {
     t, fi, bands, raw,
     bass: an.bassS[fi], bassRaw: an.bass[fi], mid: an.mid[fi], high: an.high[fi],
@@ -220,7 +225,7 @@ export function sample(an, t) {
     lastBeat, sinceBeat, bpm: an.bpm,
     bassWave: bw,
     beatsBetween: (t0, t1) => an.beats.filter((b) => b.t > t0 && b.t <= t1),
-    wave: (dt) => an.wave[Math.max(0, Math.min(an.wave.length - 1, Math.floor((t + dt) * 600)))],
+    wave: (dt) => lerpAt(an.wave, t + dt),
     // smoothed spectrum `dt` seconds ago (for history-based visuals)
     bandsAt: (dt) => {
       const j = Math.max(0, Math.min(an.frames - 1, fi - Math.round(dt * ANALYSIS_FPS)));
@@ -242,7 +247,18 @@ function deepAt(an, t) {
       const s = d.sections[i];
       if (t >= s.t0 && t < s.t1) { section = { ...s, idx: i, progress: (t - s.t0) / Math.max(0.01, s.t1 - s.t0), prev: d.sections[i - 1] || null }; break; }
     }
-    return { deep: true, kick: c.kick[j], snare: c.snare[j], hat: Math.max(c.hat[j], c.ohat[j] * 0.8), ohat: c.ohat[j], vocal: c.vocal[j], sfx: c.sfx[j], section };
+    const recent = (kind, w) => {
+      const list = d.events[kind] || [];
+      let lo = 0, hi = list.length;
+      while (lo < hi) { const m = (lo + hi) >> 1; if (list[m].t <= t) lo = m + 1; else hi = m; }
+      const out = [];
+      for (let i = lo - 1; i >= 0 && t - list[i].t <= w; i--) out.push(list[i]);
+      return out;
+    };
+    return {
+      deep: true, kick: c.kick[j], snare: c.snare[j], hat: Math.max(c.hat[j], c.ohat[j] * 0.8), hatc: c.hat[j], ohat: c.ohat[j],
+      vocal: c.vocal[j], sfx: c.sfx[j], bassLine: c.bass ? c.bass[j] : an.bassS[Math.min(an.frames - 1, Math.floor(t * ANALYSIS_FPS))], section, recent,
+    };
   }
   const pulse = (reg, decay) => {
     for (let i = an.beats.length - 1; i >= 0; i--) {
@@ -253,5 +269,11 @@ function deepAt(an, t) {
     }
     return 0;
   };
-  return { deep: false, kick: pulse(0, 0.11), snare: pulse(1, 0.13), hat: pulse(2, 0.05), ohat: 0, vocal: 0, sfx: 0, section: null };
+  const fi = Math.min(an.frames - 1, Math.max(0, Math.floor(t * ANALYSIS_FPS)));
+  const recent = (kind, w) => {
+    const reg = { kick: 0, snare: 1, hat: 2, ohat: 2, bass: 0 }[kind];
+    return an.beats.filter((b) => b.reg === reg && b.t <= t && t - b.t <= w).reverse();
+  };
+  const hat = pulse(2, 0.05);
+  return { deep: false, kick: pulse(0, 0.11), snare: pulse(1, 0.13), hat, hatc: hat, ohat: 0, vocal: 0, sfx: 0, bassLine: an.bassS[fi], section: null, recent };
 }

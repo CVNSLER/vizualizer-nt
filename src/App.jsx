@@ -6,7 +6,10 @@ import { exportVideo, saveVideo } from './exporter.js';
 import { FONTS, loadFont, previewFont } from './fonts.js';
 import { FX_PRESETS, FX_KEYS, videoTimeAt, videoRateAt } from './videofx.js';
 import { runDeepAnalysis } from './deep/index.js';
-import AlgoPanel, { playClick } from './AlgoPanel.jsx';
+import AlgoPanel from './AlgoPanel.jsx';
+import OnePanel, { LayerEditor } from './OnePanel.jsx';
+import { autoLayers } from './one.js';
+import { checkQuality, improveQuality, toWavUrl } from './quality/index.js';
 
 const FORMATS = { '9:16': [9, 16], '1:1': [1, 1], '4:5': [4, 5], '16:9': [16, 9] };
 const QUALITIES = { '720p': 720, '1080p': 1080, '4K': 2160 };
@@ -62,9 +65,10 @@ export default function App() {
   const deepJob = useRef(null);
   const [deepStatus, setDeepStatus] = useState({ status: 'idle', p: 0 });
   const [algoOpen, setAlgoOpen] = useState(false);
-  const [audition, setAudition] = useState({});
-  const auditionRef = useRef({ last: 0 });
-  auditionRef.current.cfg = audition;
+  const [oneOpen, setOneOpen] = useState(false);
+  const [quality, setQuality] = useState({ status: 'idle' });
+  const [qTarget, setQTarget] = useState(-14);
+  const [useEnhanced, setUseEnhancedRaw] = useState(false);
 
   useEffect(() => { try { localStorage.setItem('viz-settings', JSON.stringify(s)); } catch { /* ignore */ } }, [s]);
   useEffect(() => { try { localStorage.setItem('viz-lang', lang); } catch { /* ignore */ } }, [lang]);
@@ -97,24 +101,25 @@ export default function App() {
       } else {
         renderFrame(ctx, pw, ph, options, idleFeatures(performance.now() / 1000), 0);
       }
-      // "Algoritm" check: click on every detected event while the song plays
-      const ar = auditionRef.current, cfg = ar.cfg || {}, dp = audio?.analysis?.deep;
-      if (el) el.volume = cfg.duck ? 0.3 : 1;
-      if (dp && el && !el.paused && (cfg.kick || cfg.snare || cfg.hat || cfg.vocal)) {
-        if (t < ar.last || t - ar.last > 0.5) ar.last = t;
-        const crossed = (list, key = 't') => list.some((e) => e[key] > ar.last && e[key] <= t);
-        if (cfg.kick && crossed(dp.events.kick)) playClick('kick');
-        if (cfg.snare && crossed(dp.events.snare)) playClick('snare');
-        if (cfg.hat) { if (crossed(dp.events.hat)) playClick('hat'); if (crossed(dp.events.ohat)) playClick('ohat'); }
-        if (cfg.vocal && crossed(dp.vocals, 't0')) playClick('vocal');
-      }
-      ar.last = t;
       setTime(t);
       raf = requestAnimationFrame(loop);
     };
     loop();
     return () => cancelAnimationFrame(raf);
   }, [audio, options, pw, ph]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.code !== 'Space' && e.key !== ' ') return;
+      const tg = e.target;
+      const typing = tg && (tg.tagName === 'TEXTAREA' || (tg.tagName === 'INPUT' && !['checkbox', 'radio', 'range', 'color', 'file'].includes(tg.type)) || tg.isContentEditable);
+      if (typing) return;
+      e.preventDefault();
+      togglePlayRef.current?.();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   async function onAudioFile(file) {
     if (!file) return;
@@ -129,6 +134,7 @@ export default function App() {
       const url = URL.createObjectURL(file);
       setAudio({ name: file.name, url, buffer, analysis });
       // deep "Algoritm" analysis runs in the background
+      setQuality({ status: 'idle' }); setUseEnhancedRaw(false);
       deepJob.current?.cancel();
       setDeepStatus({ status: 'running', p: 0, stage: 'stft' });
       const job = runDeepAnalysis(buffer, (p, stage) => setDeepStatus((d) => (d.status === 'running' ? { ...d, p, stage } : d)));
@@ -169,6 +175,42 @@ export default function App() {
     if (key === 'bgImage') set('bgType', 'image');
   }
 
+  // ---- "1": quality check / enhancement / template builder
+  function runQualityCheck() {
+    if (!audio) return;
+    setQuality({ status: 'running' });
+    checkQuality(audio.buffer, audio.analysis.deep?.vocals || [], qTarget)
+      .then((result) => setQuality({ status: 'done', result }))
+      .catch((e) => setQuality({ status: 'error', msg: e.message }));
+  }
+  function runImprove() {
+    if (!audio || !quality.result) return;
+    setQuality((q) => ({ ...q, enhancing: true, p: 0 }));
+    improveQuality(audio.buffer, { ...quality.result.plan, target: qTarget }, audio.analysis.deep?.vocals || [], (p) => setQuality((q) => ({ ...q, p })))
+      .then((r) => {
+        if (quality.enhanced?.url) URL.revokeObjectURL(quality.enhanced.url);
+        setQuality((q) => ({ ...q, enhancing: false, enhanced: { ...r, url: toWavUrl(r.buffer) } }));
+        setUseEnhanced(true);
+      })
+      .catch((e) => setQuality((q) => ({ ...q, enhancing: false, status: 'error', msg: e.message })));
+  }
+  // switch A/B without losing the playback position
+  function setUseEnhanced(v) {
+    const el = audioRef.current;
+    if (el) {
+      const t = el.currentTime, wasPlaying = !el.paused;
+      el.addEventListener('loadedmetadata', () => { el.currentTime = t; if (wasPlaying) el.play().catch(() => {}); }, { once: true });
+    }
+    setUseEnhancedRaw(v);
+  }
+  function buildOne(variant = false) {
+    const seed = variant ? (s.oneSeed || 1) + 1 : (s.oneSeed || 1);
+    const layers = autoLayers(audio?.analysis?.deep || null, options, seed);
+    setS((p) => ({ ...p, template: 'one', layers, oneSeed: seed }));
+  }
+
+  const togglePlayRef = useRef(null);
+  togglePlayRef.current = () => togglePlay();
   function togglePlay() {
     const el = audioRef.current;
     if (!el || !audio) return;
@@ -201,7 +243,7 @@ export default function App() {
     try {
       await Promise.all([loadFont(s.titleFont), loadFont(s.subFont)]);
       const { data } = await exportVideo({
-        width: w, height: h, fps: +exp.fps, start, end, options, analysis: audio.analysis, audioBuffer: audio.buffer,
+        width: w, height: h, fps: +exp.fps, start, end, options, analysis: audio.analysis, audioBuffer: useEnhanced && quality.enhanced ? quality.enhanced.buffer : audio.buffer,
         signal: ctrl.signal,
         toDisk: diskPath ? (chunk, position) => window.desktop.writeAt(chunk, position) : null,
         onProgress: (p) => setExp((x) => x && ({ ...x, progress: p, eta: p > 0.02 ? ((performance.now() - t0) / p) * (1 - p) / 1000 : null })),
@@ -244,6 +286,10 @@ export default function App() {
             <small>{deepStatus.status === 'running' ? `${T.algoRunning} ${Math.round(deepStatus.p * 100)}%`
               : deepStatus.status === 'done' ? T.algoReady : deepStatus.status === 'error' ? T.error : T.algoHint}</small>
           </button>
+          <button id="one-btn" className="algo-btn" onClick={() => { setOneOpen(true); if (quality.status === 'idle') runQualityCheck(); }} disabled={!audio}>
+            <b>{T.oneBtn}</b>
+            <small>{quality.status === 'running' ? T.qualityRunning : quality.result ? `${T.scoreLabel}: ${quality.enhanced ? `${quality.result.score} → ${quality.enhanced.score}` : quality.result.score}` : T.oneHint}{useEnhanced && quality.enhanced ? ` · ${T.enhanced}` : ''}</small>
+          </button>
         </Section>
 
         <Section title={T.template}>
@@ -254,11 +300,20 @@ export default function App() {
               <div className="cat-name">{T.cat[c.id]}</div>
               <div className="tpl-grid">
                 {c.items.map((k) => (
-                  <button key={k} className={`tpl ${s.template === k ? 'on' : ''}`} onClick={() => set('template', s.template === k ? 'none' : k)} title={s.template === k ? T.tplOffHint : ''}>{T.tpl[k]}</button>
+                  <button key={k} className={`tpl ${s.template === k ? 'on' : ''}`} onClick={() => { if (k === 'one' && s.template !== 'one' && !s.layers?.length) buildOne(); else set('template', s.template === k ? 'none' : k); }} title={s.template === k ? T.tplOffHint : ''}>{T.tpl[k]}</button>
                 ))}
               </div>
             </div>
           ))}
+          {s.template === 'one' && (
+            <div className="one-inline">
+              <div className="q-actions">
+                <button className="primary" onClick={buildOne} disabled={!audio}>{T.buildNow}</button>
+                <button onClick={() => buildOne(true)} disabled={!s.layers?.length}>{T.variant}</button>
+              </div>
+              <LayerEditor T={T} layers={s.layers} onChange={(layers) => set('layers', layers)} />
+            </div>
+          )}
           {SHAPED.includes(s.template) && (
             <div className="seg" style={{ marginTop: 10 }}>
               {[0, 3, 4, 6].map((n) => (
@@ -408,12 +463,18 @@ export default function App() {
           <span className="time">{fmtTime(dur)}</span>
           <button className="primary" onClick={openExport}>{T.export}</button>
         </div>
-        {audio && <audio ref={audioRef} src={audio.url} onEnded={() => setPlaying(false)} />}
+        {audio && <audio ref={audioRef} src={useEnhanced && quality.enhanced ? quality.enhanced.url : audio.url} onEnded={() => setPlaying(false)} />}
       </main>
 
+      {oneOpen && (
+        <OnePanel T={T} hasAudio={!!audio} deepReady={deepStatus.status === 'done'} quality={quality}
+          onCheck={runQualityCheck} onImprove={runImprove} target={qTarget} setTarget={setQTarget}
+          useEnhanced={useEnhanced} setUseEnhanced={setUseEnhanced}
+          onBuild={() => buildOne()} onVariant={() => buildOne(true)} layers={s.layers} setLayers={(layers) => set('layers', layers)}
+          onClose={() => setOneOpen(false)} />
+      )}
       {algoOpen && (
-        <AlgoPanel T={T} deep={audio?.analysis?.deep} status={deepStatus} audioRef={audioRef}
-          audition={audition} setAudition={setAudition} onClose={() => setAlgoOpen(false)} />
+        <AlgoPanel T={T} deep={audio?.analysis?.deep} status={deepStatus} audioRef={audioRef} onClose={() => setAlgoOpen(false)} />
       )}
       {exp && (
         <div className="modal-bg">

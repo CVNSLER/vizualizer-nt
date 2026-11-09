@@ -1,9 +1,10 @@
 import { draw, drawOverlay, drawBackground } from './templates.js';
 import './templates2.js';
+import './one.js';
 
 // Template gallery, grouped by style
 export const CATEGORIES = [
-  { id: 'base', items: ['zero'] },
+  { id: 'base', items: ['zero', 'one'] },
   { id: 'circle', items: ['ring', 'dots', 'blob', 'ripples', 'hud', 'glitter'] },
   { id: 'line', items: ['wave', 'line', 'mountain', 'bars', 'led', 'surface'] },
   { id: 'space', items: ['warp', 'tunnel', 'shape', 'vortex', 'sphere', 'bubbles', 'kaleido'] },

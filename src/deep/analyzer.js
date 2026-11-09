@@ -245,6 +245,24 @@ export function deepAnalyse(input, inputSr, progress = () => {}) {
     (d / FPS > 0.12 ? ohats : hats).push(ev);
   }
 
+  // bass (808 / bass line): sustained low notes live in the harmonic part
+  const eBassH = band(Hm, 40, 250);
+  const oBass = onsetFn(eBassH);
+  const bassNotes = [];
+  {
+    const cands = pick(oBass, 0.1, 0.8, 0.15);
+    const ref = percentile(eBassH, 0.97) || 1;
+    for (const c of cands) {
+      const e = Math.max(eBassH[c.t], eBassH[c.t + 2] || 0, eBassH[c.t + 4] || 0);
+      if (e > 0.12 * ref) bassNotes.push({ t: ft(c.t), s: clamp(c.v, 0.1, 1.3) });
+    }
+  }
+  const bassEnv = new Float32Array(T);
+  {
+    const p97 = percentile(eBassH, 0.97) || 1;
+    for (let t = 0; t < T; t++) bassEnv[t] = clamp(Math.sqrt(eBassH[t] / p97), 0, 1.3);
+  }
+
   // 4. tempo + beat tracking
   progress(0.5, 'beats');
   const odf = new Float32Array(T);
@@ -583,8 +601,9 @@ export function deepAnalyse(input, inputSr, progress = () => {}) {
   };
   const curves = {
     kick: pulse(kicks, 0.11), snare: pulse(snares, 0.13), hat: pulse(hats, 0.045), ohat: pulse(ohats, 0.22),
-    vocal: new Float32Array(n60), sfx: new Float32Array(n60),
+    vocal: new Float32Array(n60), sfx: new Float32Array(n60), bass: new Float32Array(n60),
   };
+  for (let i = 0; i < n60; i++) curves.bass[i] = bassEnv[Math.min(T - 1, Math.max(0, Math.floor((i / OUT_FPS - LAG) * FPS)))];
   for (let i = 0; i < n60; i++) {
     const t = Math.min(T - 1, Math.floor((i / OUT_FPS) * FPS));
     let inV = 0;
@@ -604,7 +623,7 @@ export function deepAnalyse(input, inputSr, progress = () => {}) {
   const strip = (l) => l.map(({ t, s }) => ({ t, s }));
   return {
     version: 1, duration, bpm, key, beats, downbeats,
-    events: { kick: strip(kicks), snare: strip(snares), hat: strip(hats), ohat: strip(ohats) },
+    events: { kick: strip(kicks), snare: strip(snares), hat: strip(hats), ohat: strip(ohats), bass: bassNotes },
     vocals: vocalFinal, sfx, sections, curves, curveFps: OUT_FPS,
   };
 }

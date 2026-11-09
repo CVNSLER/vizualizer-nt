@@ -5,7 +5,7 @@ self.onmessage = (e) => {
   try {
     const res = deepAnalyse(samples, sampleRate, (p, stage) => self.postMessage({ type: 'progress', p, stage }));
     const c = res.curves;
-    self.postMessage({ type: 'done', result: res }, [c.kick.buffer, c.snare.buffer, c.hat.buffer, c.ohat.buffer, c.vocal.buffer, c.sfx.buffer]);
+    self.postMessage({ type: 'done', result: res }, [c.kick.buffer, c.snare.buffer, c.hat.buffer, c.ohat.buffer, c.vocal.buffer, c.sfx.buffer, c.bass.buffer]);
   } catch (err) {
     self.postMessage({ type: 'error', message: String(err && err.message || err) });
   }
