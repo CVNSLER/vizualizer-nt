@@ -2,6 +2,7 @@
 // so it can be rendered at any frame in any order (preview seek == export).
 
 import { NUM_BANDS } from './audio.js';
+import { fontStack } from './fonts.js';
 
 export const TAU = Math.PI * 2;
 
@@ -37,6 +38,12 @@ export function mediaOf(o) {
   return null;
 }
 
+export function drawContain(ctx, img, x, y, w, h, zoom = 1) {
+  const iw = img.videoWidth || img.width, ih = img.videoHeight || img.height;
+  const k = Math.min(w / iw, h / ih) * zoom;
+  ctx.drawImage(img, x + (w - iw * k) / 2, y + (h - ih * k) / 2, iw * k, ih * k);
+}
+
 export function drawCover(ctx, img, x, y, w, h, zoom = 1) {
   const iw = img.videoWidth || img.width, ih = img.videoHeight || img.height;
   const ir = iw / ih, r = w / h;
@@ -52,11 +59,22 @@ export function drawBackground(ctx, W, H, o, f, extra = {}) {
   if (media) {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, H);
-    const zoom = 1.04 + (extra.zoom || 0);
+    let zoom = 1.04 + (extra.zoom || 0);
+    if (o.bgMotion === 'zoom') zoom += 0.12 * (0.5 - 0.5 * Math.cos((f.t / 24) * Math.PI * 2));
+    if (o.bgMotion === 'pulse') zoom += 0.07 * f.bass * o.sens;
+    const blur = o.bgBlur > 0 ? `blur(${o.bgBlur * Math.min(W, H) / 1080}px)` : 'none';
     ctx.save();
     if (extra.dx || extra.dy) ctx.translate(extra.dx || 0, extra.dy || 0);
-    if (o.bgBlur > 0) ctx.filter = `blur(${o.bgBlur * Math.min(W, H) / 1080}px)`;
-    drawCover(ctx, media, 0, 0, W, H, zoom);
+    if (o.bgFit === 'contain') {
+      // blurred copy fills the frame, the full picture sits on top
+      ctx.filter = `blur(${30 * Math.min(W, H) / 1080}px) brightness(0.6)`;
+      drawCover(ctx, media, -40, -40, W + 80, H + 80, 1);
+      ctx.filter = blur;
+      drawContain(ctx, media, 0, 0, W, H, zoom - 0.04);
+    } else {
+      ctx.filter = blur;
+      drawCover(ctx, media, 0, 0, W, H, zoom);
+    }
     ctx.restore();
     ctx.fillStyle = `rgba(0,0,0,${o.bgDim})`;
     ctx.fillRect(0, 0, W, H);
@@ -87,14 +105,14 @@ export function drawOverlay(ctx, W, H, o, f, duration) {
     const sec = Math.max(0, f.t);
     const txt = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
     ctx.save();
-    ctx.font = `600 ${Math.round(34 * u)}px "Segoe UI", "Inter", Arial, sans-serif`;
+    ctx.font = `600 ${Math.round(34 * u)}px ${fontStack(o.subFont)}`;
     ctx.textAlign = 'right';
     ctx.fillStyle = rgba(o.textColor, 0.85);
     ctx.fillText(txt, W - 44 * u, o.textPos === 'top' ? H - 44 * u : 70 * u);
     ctx.restore();
   }
   if (o.title) {
-    ctx.font = `700 ${Math.round(o.titleSize * u)}px "Segoe UI", "Inter", Arial, sans-serif`;
+    ctx.font = `${o.titleWeight || 700} ${Math.round(o.titleSize * u)}px ${fontStack(o.titleFont)}`;
     ctx.fillStyle = o.textColor;
     ctx.shadowColor = rgba(o.color1, 0.6);
     ctx.shadowBlur = 20 * u * (0.5 + f.bass * 0.8);
@@ -102,7 +120,7 @@ export function drawOverlay(ctx, W, H, o, f, duration) {
   }
   if (o.subtitle) {
     ctx.shadowBlur = 0;
-    ctx.font = `400 ${Math.round(o.titleSize * 0.55 * u)}px "Segoe UI", "Inter", Arial, sans-serif`;
+    ctx.font = `400 ${Math.round(o.titleSize * 0.55 * u)}px ${fontStack(o.subFont)}`;
     ctx.fillStyle = rgba(o.textColor === '#ffffff' ? '#cccccc' : o.textColor, 0.85);
     ctx.fillText(o.subtitle, W / 2, ty + o.titleSize * 0.85 * u);
   }
@@ -337,7 +355,7 @@ draw.radar = (ctx, W, H, o, f) => {
   // centre
   ctx.fillStyle = rgba(o.color2, 0.4 + 0.6 * f.bass);
   ctx.beginPath(); ctx.arc(cx, cy, (10 + 14 * f.bass) * u, 0, TAU); ctx.fill();
-  ctx.font = `600 ${Math.round(22 * u)}px "Segoe UI", Arial, sans-serif`;
+  ctx.font = `600 ${Math.round(22 * u)}px ${fontStack(o.subFont)}`;
   ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.textAlign = 'center';
   ctx.shadowBlur = 0;
   ctx.fillText(`${f.bpm} BPM`, cx, cy + R + 60 * u);

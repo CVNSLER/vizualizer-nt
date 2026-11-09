@@ -1,6 +1,7 @@
 // Additional visualiser styles. Each one is an original, procedural take on a
 // popular music-visualiser genre (circular spectrum, tunnel, synthwave, vinyl…).
 import { NUM_BANDS } from './audio.js';
+import { fontStack } from './fonts.js';
 import { draw, drawBackground, drawCover, mediaOf, beatParticles, rng, mix, rgba, TAU } from './templates.js';
 
 const unit = (W, H) => Math.min(W, H) / 1080;
@@ -495,7 +496,7 @@ draw.cassette = (ctx, W, H, o, f) => {
   const lg = ctx.createLinearGradient(x, 0, x + w, 0); lg.addColorStop(0, o.color1); lg.addColorStop(1, o.color2);
   ctx.fillStyle = lg; ctx.beginPath(); ctx.roundRect(x + 40 * u, y + 34 * u, w - 80 * u, 260 * u, 14 * u); ctx.fill();
   ctx.fillStyle = '#f2f2f2'; ctx.fillRect(x + 40 * u, y + 34 * u, w - 80 * u, 54 * u);
-  ctx.fillStyle = '#111'; ctx.font = `700 ${30 * u}px "Segoe UI", Arial, sans-serif`; ctx.textAlign = 'left';
+  ctx.fillStyle = '#111'; ctx.font = `700 ${30 * u}px ${fontStack(o.titleFont)}`; ctx.textAlign = 'left';
   ctx.fillText((o.title || 'MIXTAPE').slice(0, 32), x + 60 * u, y + 72 * u);
   // window
   const wx = x + 170 * u, wy = y + 120 * u, ww = w - 340 * u, wh = 140 * u;
@@ -552,9 +553,9 @@ draw.album = (ctx, W, H, o, f) => {
   const iw = portrait ? W * 0.76 : W * 0.38;
   ctx.save();
   ctx.textAlign = 'left'; ctx.fillStyle = o.textColor;
-  ctx.font = `800 ${Math.round(o.titleSize * 1.05 * u)}px "Segoe UI", Arial, sans-serif`;
+  ctx.font = `${o.titleWeight || 800} ${Math.round(o.titleSize * 1.05 * u)}px ${fontStack(o.titleFont)}`;
   ctx.fillText(o.title || 'Track name', ix, iy);
-  ctx.globalAlpha = 0.75; ctx.font = `400 ${Math.round(o.titleSize * 0.6 * u)}px "Segoe UI", Arial, sans-serif`;
+  ctx.globalAlpha = 0.75; ctx.font = `400 ${Math.round(o.titleSize * 0.6 * u)}px ${fontStack(o.subFont)}`;
   ctx.fillText(o.subtitle || 'Artist', ix, iy + o.titleSize * 0.95 * u);
   ctx.globalAlpha = 1;
   // bars
@@ -570,7 +571,7 @@ draw.album = (ctx, W, H, o, f) => {
   ctx.fillStyle = o.color2; ctx.fillRect(ix, py, iw * prog, 5 * u);
   ctx.beginPath(); ctx.arc(ix + iw * prog, py + 2.5 * u, 10 * u, 0, TAU); ctx.fillStyle = '#fff'; ctx.fill();
   const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-  ctx.font = `500 ${24 * u}px "Segoe UI", Arial, sans-serif`; ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = `500 ${24 * u}px ${fontStack(o.subFont)}`; ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.fillText(fmt(f.t), ix, py + 46 * u);
   ctx.textAlign = 'right'; ctx.fillText(fmt(f.duration || 0), ix + iw, py + 46 * u);
   ctx.restore();
@@ -785,7 +786,7 @@ draw.heartbeat = (ctx, W, H, o, f) => {
     ctx.beginPath(); ctx.arc(W - 4 * u, y0, 5 * u, 0, TAU); ctx.fill();
   });
   ctx.restore();
-  ctx.save(); ctx.fillStyle = rgba(o.color2, 0.9); ctx.font = `700 ${46 * u}px "Segoe UI", Arial, sans-serif`;
+  ctx.save(); ctx.fillStyle = rgba(o.color2, 0.9); ctx.font = `700 ${46 * u}px ${fontStack(o.subFont)}`;
   ctx.textAlign = 'right'; ctx.fillText(`♥ ${f.bpm}`, W - 50 * u, H * 0.12); ctx.restore();
 };
 

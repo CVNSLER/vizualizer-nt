@@ -3,6 +3,7 @@ import { STRINGS } from './i18n.js';
 import { CATEGORIES, PALETTES, SHAPED, renderFrame } from './catalog.js';
 import { analyse, decodeFile, sample } from './audio.js';
 import { exportVideo, saveVideo } from './exporter.js';
+import { FONTS, loadFont, previewFont } from './fonts.js';
 
 const FORMATS = { '9:16': [9, 16], '1:1': [1, 1], '4:5': [4, 5], '16:9': [16, 9] };
 const QUALITIES = { '720p': 720, '1080p': 1080, '4K': 2160 };
@@ -14,6 +15,7 @@ const DEFAULTS = {
   title: '', subtitle: '', textColor: '#ffffff', titleSize: 64, showProgress: false,
   logoPos: 'tr', logoScale: 1, sens: 1,
   showTimer: false, textPos: 'bottom', shapeSides: 6,
+  titleFont: 'Montserrat', subFont: 'Montserrat', titleWeight: 700, bgFit: 'cover', bgMotion: 'none',
 };
 
 function dims(format, short) {
@@ -58,6 +60,7 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem('viz-lang', lang); } catch { /* ignore */ } }, [lang]);
 
   const options = useMemo(() => ({ ...s, ...images }), [s, images]);
+  useEffect(() => { loadFont(s.titleFont); loadFont(s.subFont); }, [s.titleFont, s.subFont]);
   const [pw, ph] = dims(s.format, 540);
 
   // render loop for the preview
@@ -105,6 +108,13 @@ export default function App() {
     setBusy(null);
   }
 
+  function onDropFile(file) {
+    if (!file) return;
+    if (file.type.startsWith('image/')) onImage('bgImage', file);
+    else if (file.type.startsWith('video/')) onVideo(file);
+    else if (file.type.startsWith('audio/') || /\.(mp3|wav|m4a|ogg|flac|aac)$/i.test(file.name)) onAudioFile(file);
+  }
+
   async function onVideo(file) {
     if (!file) return;
     const v = document.createElement('video');
@@ -143,6 +153,7 @@ export default function App() {
     const t0 = performance.now();
     setExp((p) => ({ ...p, progress: 0, error: null, result: null }));
     try {
+      await Promise.all([loadFont(s.titleFont), loadFont(s.subFont)]);
       const { data } = await exportVideo({
         width: w, height: h, fps: +exp.fps, start, end, options, analysis: audio.analysis, audioBuffer: audio.buffer,
         signal: ctrl.signal,
@@ -199,6 +210,55 @@ export default function App() {
           )}
         </Section>
 
+        <Section title={T.background}>
+          <div className="bg-pick">
+            <label className="btn primary-soft">
+              <input id="bg-image-input" type="file" accept="image/*" hidden onChange={(e) => onImage('bgImage', e.target.files[0])} />
+              {images.bgImage ? T.changeBgImage : T.addBgImage}
+            </label>
+            {images.bgImage && <img src={images.bgImage.src} alt="" />}
+          </div>
+          <div className="seg">
+            {[['gradient', T.bgGradient], ['color', T.bgColor], ['image', T.bgImage], ['video', T.bgVideo]].map(([k, l]) => (
+              <button key={k} className={s.bgType === k ? 'on' : ''} onClick={() => set('bgType', k)}>{l}</button>
+            ))}
+          </div>
+          {(s.bgType === 'gradient' || s.bgType === 'color') && <Color label={T.bgColor1} value={s.bgColor1} onChange={(v) => set('bgColor1', v)} />}
+          {s.bgType === 'gradient' && <Color label={T.bgColor2} value={s.bgColor2} onChange={(v) => set('bgColor2', v)} />}
+          {s.bgType === 'image' && !images.bgImage && <p className="hint">{T.noBgImage}</p>}
+          {s.bgType === 'image' && images.bgImage && (
+            <button onClick={() => { setImages((p) => ({ ...p, bgImage: null })); set('bgType', 'gradient'); }}>{T.remove}</button>
+          )}
+          {s.bgType === 'video' && (
+            <div className="imgpick">
+              <label className="btn">
+                <input type="file" accept="video/*" hidden onChange={(e) => onVideo(e.target.files[0])} />
+                {T.chooseVideo}
+              </label>
+              {images.bgVideo && <button onClick={() => { images.bgVideo.pause(); setImages((p) => ({ ...p, bgVideo: null })); }}>{T.remove}</button>}
+            </div>
+          )}
+          {(s.bgType === 'image' || s.bgType === 'video') && (
+            <>
+              <div className="seg">
+                {[['cover', T.fit.cover], ['contain', T.fit.contain]].map(([k, l]) => (
+                  <button key={k} className={s.bgFit === k ? 'on' : ''} onClick={() => set('bgFit', k)}>{l}</button>
+                ))}
+              </div>
+              <label className="row">{T.bgMotion}
+                <select id="bg-motion" value={s.bgMotion} onChange={(e) => set('bgMotion', e.target.value)}>
+                  {Object.entries(T.motion).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+              </label>
+              <Range label={T.dim} min={0} max={0.9} step={0.05} value={s.bgDim} onChange={(v) => set('bgDim', v)} />
+              <Range label={T.blur} min={0} max={30} step={1} value={s.bgBlur} onChange={(v) => set('bgBlur', v)} />
+            </>
+          )}
+          <div className="sub">{T.cover}</div>
+          <ImagePick label={T.chooseImage} img={images.centerImage} T={T} onPick={(f) => onImage('centerImage', f)} onClear={() => setImages((p) => ({ ...p, centerImage: null }))} />
+          <p className="hint">{T.dropAnything}</p>
+        </Section>
+
         <Section title={T.format}>
           <div className="seg">
             {Object.keys(FORMATS).map((f) => (
@@ -219,39 +279,16 @@ export default function App() {
           <Range label={T.sensitivity} min={0.3} max={2} step={0.05} value={s.sens} onChange={(v) => set('sens', v)} />
         </Section>
 
-        <Section title={T.background}>
-          <div className="seg">
-            {[['gradient', T.bgGradient], ['color', T.bgColor], ['image', T.bgImage], ['video', T.bgVideo]].map(([k, l]) => (
-              <button key={k} className={s.bgType === k ? 'on' : ''} onClick={() => set('bgType', k)}>{l}</button>
-            ))}
-          </div>
-          {(s.bgType === 'gradient' || s.bgType === 'color') && <Color label={T.bgColor1} value={s.bgColor1} onChange={(v) => set('bgColor1', v)} />}
-          {s.bgType === 'gradient' && <Color label={T.bgColor2} value={s.bgColor2} onChange={(v) => set('bgColor2', v)} />}
-          {s.bgType === 'video' && (
-            <div className="imgpick">
-              <label className="btn">
-                <input type="file" accept="video/*" hidden onChange={(e) => onVideo(e.target.files[0])} />
-                {T.chooseVideo}
-              </label>
-              {images.bgVideo && <button onClick={() => { images.bgVideo.pause(); setImages((p) => ({ ...p, bgVideo: null })); }}>{T.remove}</button>}
-            </div>
-          )}
-          {(s.bgType === 'image' || s.bgType === 'video') && (
-            <>
-              {s.bgType === 'image' && <ImagePick label={T.chooseImage} img={images.bgImage} T={T} onPick={(f) => onImage('bgImage', f)} onClear={() => setImages((p) => ({ ...p, bgImage: null }))} />}
-              <Range label={T.dim} min={0} max={0.9} step={0.05} value={s.bgDim} onChange={(v) => set('bgDim', v)} />
-              <Range label={T.blur} min={0} max={30} step={1} value={s.bgBlur} onChange={(v) => set('bgBlur', v)} />
-            </>
-          )}
-          <div className="sub">{T.cover}</div>
-          {(
-            <ImagePick label={T.chooseImage} img={images.centerImage} T={T} onPick={(f) => onImage('centerImage', f)} onClear={() => setImages((p) => ({ ...p, centerImage: null }))} />
-          )}
-        </Section>
-
         <Section title={T.text}>
           <input className="txt" placeholder={T.title} value={s.title} onChange={(e) => set('title', e.target.value)} />
           <input className="txt" placeholder={T.subtitle} value={s.subtitle} onChange={(e) => set('subtitle', e.target.value)} />
+          <FontPicker id="title-font" label={T.titleFont} value={s.titleFont} onChange={(v) => set('titleFont', v)} T={T} sample={s.title || T.title} />
+          <FontPicker id="sub-font" label={T.subFont} value={s.subFont} onChange={(v) => set('subFont', v)} T={T} sample={s.subtitle || T.subtitle} />
+          <label className="row">{T.weight}
+            <select id="title-weight" value={s.titleWeight} onChange={(e) => set('titleWeight', +e.target.value)}>
+              {[300, 400, 500, 600, 700, 800, 900].map((w) => <option key={w} value={w}>{w}</option>)}
+            </select>
+          </label>
           <Color label={T.textColor} value={s.textColor} onChange={(v) => set('textColor', v)} />
           <Range label={T.textSize} min={30} max={120} step={1} value={s.titleSize} onChange={(v) => set('titleSize', v)} />
           <div className="seg">
@@ -279,7 +316,7 @@ export default function App() {
       </aside>
 
       <main className="stage">
-        <div className="canvas-wrap" style={{ aspectRatio: `${pw} / ${ph}`, width: `min(100%, calc((100vh - 110px) * ${pw / ph}))`, '--ar': pw / ph }}>
+        <div className="canvas-wrap" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); onDropFile(e.dataTransfer.files[0]); }} style={{ aspectRatio: `${pw} / ${ph}`, width: `min(100%, calc((100vh - 110px) * ${pw / ph}))`, '--ar': pw / ph }}>
           <canvas ref={canvasRef} width={pw} height={ph} />
           {busy && <div className="busy"><div className="spinner" />{busy}</div>}
           {notice && <button className="notice" onClick={() => setNotice(null)}>{notice}</button>}
@@ -376,6 +413,52 @@ function ImagePick({ label, img, onPick, onClear, T }) {
         {label}
       </label>
       {img && <><img src={img.src} alt="" /><button onClick={onClear}>{T.remove}</button></>}
+    </div>
+  );
+}
+
+const FCATS = ['s', 'f', 'd', 'h', 'm'];
+function FontPicker({ id, label, value, onChange, T, sample }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const [cat, setCat] = useState('');
+  const [cyr, setCyr] = useState(false);
+  const [limit, setLimit] = useState(60);
+  const list = useMemo(() => {
+    const qq = q.trim().toLowerCase();
+    return FONTS.filter((f) => (!cat || f[1] === cat) && (!cyr || f[3]) && (!qq || f[0].toLowerCase().includes(qq)));
+  }, [q, cat, cyr]);
+  const shown = list.slice(0, limit);
+  useEffect(() => { if (open) shown.forEach((f) => previewFont(f[0])); }, [open, shown]);
+  useEffect(() => { if (value) previewFont(value); }, [value]);
+  return (
+    <div className="fontpick">
+      <div className="row">{label}
+        <button id={id} className="font-btn" style={{ fontFamily: `"${value}", sans-serif` }} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+          {value || '—'} ▾
+        </button>
+      </div>
+      {open && (
+        <div className="font-pop">
+          <input id={`${id}-search`} className="txt" placeholder={T.search} value={q} onChange={(e) => { setQ(e.target.value); setLimit(60); }} autoFocus />
+          <div className="chips">
+            <button className={!cat ? 'on' : ''} onClick={() => { setCat(''); setLimit(60); }}>{T.all}</button>
+            {FCATS.map((c) => <button key={c} className={cat === c ? 'on' : ''} onClick={() => { setCat(c); setLimit(60); }}>{T.fcat[c]}</button>)}
+          </div>
+          <label className="check"><input id={`${id}-cyr`} type="checkbox" checked={cyr} onChange={(e) => { setCyr(e.target.checked); setLimit(60); }} /> {T.cyrOnly}</label>
+          <div className="font-count">{T.fontsFound} {list.length}</div>
+          <div className="font-list">
+            {shown.map((f) => (
+              <button key={f[0]} className={`font-item ${value === f[0] ? 'on' : ''}`} onClick={() => { onChange(f[0]); setOpen(false); }}>
+                <span style={{ fontFamily: `"${f[0]}", sans-serif` }}>{f[0]}</span>
+                <small>{T.fcat[f[1]]}{f[3] ? ' · Кир' : ''}</small>
+              </button>
+            ))}
+            {list.length > limit && <button className="more" onClick={() => setLimit((l) => l + 60)}>{T.more} ({list.length - limit})</button>}
+          </div>
+          <div className="font-sample" style={{ fontFamily: `"${value}", sans-serif` }}>{sample}</div>
+        </div>
+      )}
     </div>
   );
 }

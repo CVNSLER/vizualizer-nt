@@ -81,3 +81,22 @@ input.txt { width: 100%; margin-bottom: 8px; }
   .seek { min-width: 0; }
   .modal { width: calc(100% - 32px); }
 }
+
+.bg-pick { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.bg-pick img { width: 54px; height: 54px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
+.btn.primary-soft { background: rgba(124, 92, 255, .18); border: 1px solid var(--accent); border-radius: 8px; padding: 9px 14px; cursor: pointer; font-weight: 600; }
+.hint { color: var(--muted); font-size: 12px; margin: 4px 0 10px; }
+.fontpick { margin-bottom: 4px; }
+.font-btn { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.font-pop { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.chips button { padding: 3px 8px; font-size: 12px; border-radius: 12px; }
+.chips button.on { border-color: var(--accent); background: rgba(124, 92, 255, .18); }
+.font-count { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.font-list { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.font-item { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; text-align: left; border: 1px solid transparent; background: transparent; padding: 6px 8px; }
+.font-item span { font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.font-item small { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.font-item:hover, .font-item.on { background: rgba(124, 92, 255, .15); border-color: var(--line); }
+.more { margin-top: 6px; }
+.font-sample { margin-top: 10px; font-size: 24px; padding: 8px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
