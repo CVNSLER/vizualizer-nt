@@ -25,7 +25,6 @@ function init() {
   canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); gl = null; progs.clear(); targets.length = 0; snaps.clear(); });
   return true;
 }
-export const gpuAvailable = () => init();
 
 function compile(type, src) {
   const s = gl.createShader(type);

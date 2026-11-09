@@ -11,7 +11,6 @@ export const CATEGORIES = [
   { id: 'retro', items: ['synthwave', 'vinyl', 'cassette', 'heartbeat', 'radar'] },
   { id: 'promo', items: ['album', 'podcast', 'glitch', 'shake'] },
 ];
-export const TEMPLATES = CATEGORIES.flatMap((c) => c.items);
 // templates that use the shape option
 export const SHAPED = ['tunnel', 'shape'];
 

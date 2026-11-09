@@ -10,8 +10,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "vite build && electron .",
-    "dist": "vite build && electron-builder --win --x64",
-    "artifact": "vite build && node scripts/build-artifact.mjs"
+    "dist": "node scripts/check-features.mjs && vite build && electron-builder --win --x64",
+    "artifact": "node scripts/check-features.mjs && vite build && node scripts/build-artifact.mjs",
+    "check": "node scripts/check-features.mjs"
   },
   "dependencies": {
     "mp4-muxer": "5.2.2"

@@ -10,7 +10,6 @@ export const FX_PRESETS = {
   vhs: { fxCut: 0, fxSpeed: 0.3, fxPunch: 0.3, fxDuotone: 0.1, fxGlitch: 0.4, fxVhs: 0.9 },
   neon: { fxCut: 4, fxSpeed: 0, fxPunch: 0.7, fxDuotone: 0.85, fxGlitch: 0.2, fxVhs: 0 },
 };
-export const FX_KEYS = Object.keys(FX_PRESETS.none);
 
 function rnd(seed) {
   let t = (seed * 0x6d2b79f5) >>> 0;

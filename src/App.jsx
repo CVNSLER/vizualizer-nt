@@ -4,7 +4,7 @@ import { CATEGORIES, PALETTES, SHAPED, renderFrame } from './catalog.js';
 import { analyse, decodeFile, sample } from './audio.js';
 import { exportVideo, saveVideo } from './exporter.js';
 import { FONTS, loadFont, previewFont } from './fonts.js';
-import { FX_PRESETS, FX_KEYS, videoTimeAt, videoRateAt } from './videofx.js';
+import { FX_PRESETS, videoTimeAt, videoRateAt } from './videofx.js';
 import { runDeepAnalysis } from './deep/index.js';
 import AlgoPanel from './AlgoPanel.jsx';
 import OnePanel, { LayerEditor } from './OnePanel.jsx';
