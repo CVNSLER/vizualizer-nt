@@ -1,6 +1,6 @@
 {
   "name": "vizualizator",
-  "productName": "Vizualizator",
+  "productName": "Vizualizator v1.0",
   "version": "1.0.0",
   "description": "Musiqa vizualizatori / Музыкальный визуализатор",
   "main": "electron/main.cjs",
@@ -28,7 +28,7 @@
   },
   "build": {
     "appId": "uz.vizualizator.app",
-    "productName": "Vizualizator",
+    "productName": "Vizualizator v1.0",
     "files": [
       "dist/**",
       "electron/**",

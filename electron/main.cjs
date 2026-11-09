@@ -9,7 +9,7 @@ function createWindow() {
     minWidth: 1000,
     minHeight: 650,
     backgroundColor: '#0d0f14',
-    title: 'Vizualizator',
+    title: 'Vizualizator v1.0',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

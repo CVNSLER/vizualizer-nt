@@ -20,7 +20,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@v4
         with:
-          name: Vizualizator-Windows
+          name: Vizualizator-v1.0-Windows
           path: |
             release/*.exe
           if-no-files-found: error

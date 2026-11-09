@@ -19,7 +19,7 @@ const guard = `<script>
   setTimeout(function(){var r=document.getElementById('root');if(r&&!r.childElementCount)show('Ilova 8 soniyada ishga tushmadi (skript yuklanmagan yoki bloklangan).');},8000);
 })();
 </script>`;
-const out = `<title>Vizualizator</title>
+const out = `<title>Vizualizator v1.0</title>
 <style>
 ${css}
 </style>
