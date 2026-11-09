@@ -2,7 +2,7 @@
 // popular music-visualiser genre (circular spectrum, tunnel, synthwave, vinyl…).
 import { NUM_BANDS } from './audio.js';
 import { fontStack } from './fonts.js';
-import { draw, drawBackground, drawCover, mediaOf, beatParticles, rng, mix, rgba, TAU } from './templates.js';
+import { draw, drawBackground, drawCover, mediaOf, beatParticles, rng, mix, rgba, TAU, blurredCopy } from './templates.js';
 
 const unit = (W, H) => Math.min(W, H) / 1080;
 const centre = (W, H) => [W / 2, H > W * 1.2 ? H * 0.42 : H / 2];
@@ -535,7 +535,7 @@ draw.album = (ctx, W, H, o, f) => {
   const u = unit(W, H);
   // blurred cover as background when available
   if (o.centerImage && !mediaOf(o)) {
-    ctx.save(); ctx.filter = `blur(${40 * u}px)`; drawCover(ctx, o.centerImage, -60 * u, -60 * u, W + 120 * u, H + 120 * u); ctx.restore();
+    ctx.drawImage(blurredCopy(o.centerImage, W, H, 40 * u), 0, 0);
     ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0, 0, W, H);
   } else drawBackground(ctx, W, H, o, f);
   const portrait = H > W * 1.2;

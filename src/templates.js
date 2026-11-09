@@ -38,13 +38,69 @@ export function mediaOf(o) {
   return null;
 }
 
+// Big photos (4000-6000 px) are expensive to draw every frame, especially at 4K.
+// Keep a downscaled copy per size bucket and draw that instead.
+const scaledCache = new WeakMap();
+export function fitSource(img, needW, needH) {
+  if (!img || img.videoWidth || !img.width) return img;
+  const want = Math.max(needW, needH) * 1.15;
+  const big = Math.max(img.width, img.height);
+  if (big <= want * 1.3) return img;
+  const bucket = Math.ceil(want / 256) * 256;
+  let m = scaledCache.get(img);
+  if (!m) { m = new Map(); scaledCache.set(img, m); }
+  if (!m.has(bucket)) {
+    const k = bucket / big;
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.width * k)); c.height = Math.max(1, Math.round(img.height * k));
+    const cx = c.getContext('2d');
+    cx.imageSmoothingQuality = 'high';
+    cx.drawImage(img, 0, 0, c.width, c.height);
+    m.set(bucket, c);
+  }
+  return m.get(bucket);
+}
+
+// The blurred / fitted background is identical every frame: render it once per size.
+const bgCache = new WeakMap();
+function preparedBackground(media, W, H, o, cache = bgCache) {
+  if (media.videoWidth) return null; // videos change every frame
+  const key = `${W}x${H}|${o.bgBlur}|${o.bgFit}`;
+  const hit = cache.get(media);
+  if (hit && hit.key === key) return hit.canvas;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const cx = c.getContext('2d');
+  const blur = o.bgBlur > 0 ? `blur(${o.bgBlur * Math.min(W, H) / 1080}px)` : 'none';
+  if (o.bgFit === 'contain') {
+    cx.filter = `blur(${30 * Math.min(W, H) / 1080}px) brightness(0.6)`;
+    drawCover(cx, media, -40, -40, W + 80, H + 80, 1);
+    cx.filter = blur;
+    drawContain(cx, media, 0, 0, W, H, 1);
+  } else {
+    cx.filter = blur;
+    // draw a little larger so blurred edges stay filled
+    const pad = o.bgBlur > 0 ? o.bgBlur * 2 * Math.min(W, H) / 1080 : 0;
+    drawCover(cx, media, -pad, -pad, W + pad * 2, H + pad * 2, 1);
+  }
+  cache.set(media, { key, canvas: c });
+  return c;
+}
+const blurCache = new WeakMap();
+export function blurredCopy(img, W, H, px) {
+  const fake = { bgBlur: px * 1080 / Math.min(W, H), bgFit: 'cover' };
+  return preparedBackground(img, W, H, fake, blurCache);
+}
+
 export function drawContain(ctx, img, x, y, w, h, zoom = 1) {
+  img = fitSource(img, w * zoom, h * zoom);
   const iw = img.videoWidth || img.width, ih = img.videoHeight || img.height;
   const k = Math.min(w / iw, h / ih) * zoom;
   ctx.drawImage(img, x + (w - iw * k) / 2, y + (h - ih * k) / 2, iw * k, ih * k);
 }
 
 export function drawCover(ctx, img, x, y, w, h, zoom = 1) {
+  img = fitSource(img, w * zoom, h * zoom);
   const iw = img.videoWidth || img.width, ih = img.videoHeight || img.height;
   const ir = iw / ih, r = w / h;
   let dw, dh;
@@ -65,7 +121,11 @@ export function drawBackground(ctx, W, H, o, f, extra = {}) {
     const blur = o.bgBlur > 0 ? `blur(${o.bgBlur * Math.min(W, H) / 1080}px)` : 'none';
     ctx.save();
     if (extra.dx || extra.dy) ctx.translate(extra.dx || 0, extra.dy || 0);
-    if (o.bgFit === 'contain') {
+    const pre = preparedBackground(media, W, H, o);
+    if (pre) {
+      const z = zoom; // prepared at zoom 1, scale up around the centre
+      ctx.drawImage(pre, (W - W * z) / 2, (H - H * z) / 2, W * z, H * z);
+    } else if (o.bgFit === 'contain') {
       // blurred copy fills the frame, the full picture sits on top
       ctx.filter = `blur(${30 * Math.min(W, H) / 1080}px) brightness(0.6)`;
       drawCover(ctx, media, -40, -40, W + 80, H + 80, 1);
@@ -378,8 +438,12 @@ draw.shake = (ctx, W, H, o, f) => {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = Math.min(0.35, (d - 0.35) * 0.6);
-      ctx.filter = 'hue-rotate(180deg)';
-      drawCover(ctx, media, dx * 1.8, dy * -1.5, W, H, 1.04 + zoom);
+      const pre = preparedBackground(media, W, H, o);
+      if (pre) ctx.drawImage(pre, dx * 1.8 - W * zoom / 2, dy * -1.5 - H * zoom / 2, W * (1 + zoom), H * (1 + zoom));
+      else drawCover(ctx, media, dx * 1.8, dy * -1.5, W, H, 1.04 + zoom);
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.fillStyle = rgba(o.color2, 0.5);
+      ctx.fillRect(0, 0, W, H);
       ctx.restore();
     }
   } else {

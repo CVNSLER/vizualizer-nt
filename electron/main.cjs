@@ -37,6 +37,19 @@ ipcMain.handle('save:chunk', async (_e, chunk) => {
   fs.writeSync(pending.fd, Buffer.from(chunk));
   return true;
 });
+ipcMain.handle('save:writeAt', async (_e, { chunk, position }) => {
+  if (!pending) throw new Error('no file');
+  const buf = Buffer.from(chunk);
+  fs.writeSync(pending.fd, buf, 0, buf.length, position);
+  return true;
+});
+ipcMain.handle('save:abort', async () => {
+  if (!pending) return false;
+  fs.closeSync(pending.fd);
+  try { fs.unlinkSync(pending.file); } catch { /* ignore */ }
+  pending = null;
+  return true;
+});
 ipcMain.handle('save:finish', async (_e, { reveal }) => {
   if (!pending) return false;
   fs.closeSync(pending.fd);

@@ -1,5 +1,5 @@
 // Video export with WebCodecs + mp4-muxer (no ffmpeg needed).
-import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
+import { Muxer, ArrayBufferTarget, StreamTarget } from 'mp4-muxer';
 import { sample } from './audio.js';
 import { renderFrame } from './catalog.js';
 
@@ -65,17 +65,25 @@ function resample(data, from, to) {
  * opts: { width, height, fps, start, end, options (visual), analysis, audioBuffer, onProgress, signal }
  * returns Uint8Array of an MP4 file
  */
-export async function exportVideo({ width, height, fps, start, end, options, analysis, audioBuffer, onProgress, signal }) {
+export async function exportVideo({ width, height, fps, start, end, options, analysis, audioBuffer, onProgress, signal, toDisk }) {
   const v = await pickVideoConfig(width, height, fps);
   const ch = Math.min(2, audioBuffer.numberOfChannels);
   const a = await pickAudioConfig(audioBuffer.sampleRate, ch);
 
-  const target = new ArrayBufferTarget();
+  // Desktop app: stream the file straight to disk so long 4K videos do not sit in memory.
+  let target, writes = Promise.resolve();
+  if (toDisk) {
+    target = new StreamTarget({
+      chunked: true,
+      chunkSize: 16 * 1024 * 1024,
+      onData: (data, position) => { const copy = data.slice(); writes = writes.then(() => toDisk(copy, position)); },
+    });
+  } else target = new ArrayBufferTarget();
   const muxer = new Muxer({
     target,
     video: { codec: v.mux, width, height, frameRate: fps },
     audio: a ? { codec: a.mux, sampleRate: a.cfg.sampleRate, numberOfChannels: ch } : undefined,
-    fastStart: 'in-memory',
+    fastStart: toDisk ? false : 'in-memory',
     firstTimestampBehavior: 'offset',
   });
 
@@ -138,18 +146,20 @@ export async function exportVideo({ width, height, fps, start, end, options, ana
     const frame = new VideoFrame(canvas, { timestamp: Math.round((i / fps) * 1e6), duration: Math.round(1e6 / fps) });
     venc.encode(frame, { keyFrame: i % (fps * 2) === 0 });
     frame.close();
-    while (venc.encodeQueueSize > 6) await new Promise((r) => setTimeout(r, 2));
-    if (i % 5 === 0) {
-      onProgress?.(i / n);
-      await new Promise((r) => setTimeout(r, 0)); // let the UI breathe
-    }
+    // keep very few frames in flight: each 4K frame is ~33 MB of video memory
+    const maxQueue = width * height > 2.5e6 ? 1 : 3;
+    while (venc.encodeQueueSize > maxQueue) await new Promise((r) => setTimeout(r, 4));
+    if (toDisk && i % 30 === 0) await writes;
+    if (i % 5 === 0) onProgress?.(i / n);
+    await new Promise((r) => setTimeout(r, 0)); // let the GPU and UI catch up every frame
   }
   await venc.flush();
   venc.close();
   if (failure) throw failure;
   muxer.finalize();
+  await writes;
   onProgress?.(1);
-  return { data: new Uint8Array(target.buffer), codec: v.mux, audioCodec: a?.mux || null };
+  return { data: toDisk ? null : new Uint8Array(target.buffer), codec: v.mux, audioCodec: a?.mux || null };
 }
 
 export async function saveVideo(data, name, title) {

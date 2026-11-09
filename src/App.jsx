@@ -68,6 +68,7 @@ export default function App() {
     let raf;
     const ctx = canvasRef.current.getContext('2d');
     const loop = () => {
+      if (window.__vizExporting) { raf = requestAnimationFrame(loop); return; } // free the GPU for the export
       const el = audioRef.current;
       const t = el ? el.currentTime : 0;
       const v = options.bgType === 'video' ? options.bgVideo : null;
@@ -152,19 +153,33 @@ export default function App() {
     abortRef.current = ctrl;
     const t0 = performance.now();
     setExp((p) => ({ ...p, progress: 0, error: null, result: null }));
+    const base = audio.name.replace(/\.[^.]+$/, '');
+    const fileName = `${base}_${s.template}_${s.format.replace(':', 'x')}.mp4`;
+    // Desktop app: pick the file first, then stream the video straight into it.
+    let diskPath = null;
+    if (window.desktop?.writeAt) {
+      diskPath = await window.desktop.chooseSavePath(fileName, T.saveAs);
+      if (!diskPath) { setExp((p) => p && ({ ...p, progress: null })); return; }
+    }
+    window.__vizExporting = true;
     try {
       await Promise.all([loadFont(s.titleFont), loadFont(s.subFont)]);
       const { data } = await exportVideo({
         width: w, height: h, fps: +exp.fps, start, end, options, analysis: audio.analysis, audioBuffer: audio.buffer,
         signal: ctrl.signal,
+        toDisk: diskPath ? (chunk, position) => window.desktop.writeAt(chunk, position) : null,
         onProgress: (p) => setExp((x) => x && ({ ...x, progress: p, eta: p > 0.02 ? ((performance.now() - t0) / p) * (1 - p) / 1000 : null })),
       });
-      const base = audio.name.replace(/\.[^.]+$/, '');
-      const saved = await saveVideo(data, `${base}_${s.template}_${s.format.replace(':', 'x')}.mp4`, T.saveAs);
+      let saved;
+      if (diskPath) { await window.desktop.finishSave(true); saved = diskPath; }
+      else saved = await saveVideo(data, fileName, T.saveAs);
       setExp((p) => p && ({ ...p, progress: null, result: saved || '—' }));
     } catch (e) {
+      if (diskPath) await window.desktop.abortSave().catch(() => {});
       if (e.message === 'ABORTED') setExp((p) => p && ({ ...p, progress: null }));
       else setExp((p) => p && ({ ...p, progress: null, error: e.message === 'NO_VIDEO_CODEC' ? T.noCodec : String(e.message || e) }));
+    } finally {
+      window.__vizExporting = false;
     }
   }
 
