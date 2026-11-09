@@ -11,6 +11,7 @@ Musiqa vizualizatori — Windows uchun ilova (o‘zbekcha / русский).
   - **Retro:** Synthwave, Plastinka, Kasseta, Yurak urishi, Radar
   - **Promo va rasm:** Albom promo, Podkast, Glitch, Rasm titrashi
 - Tayyor rang palitralari, muqova rasmi, vaqt hisoblagichi, matn joylashuvi
+- '1' shablonida 248 ta effekt: 29 ta GPU kadr filtri (glfx.js asosida + o'zimizniki), 208 ta gl-transitions zarb o'tishi va 11 ta ustki effekt; rasmda ham, videoda ham ishlaydi. Litsenziyalar: THIRD_PARTY_NOTICES.md
 - Formatlar: 9:16, 1:1, 4:5, 16:9
 - Fon: gradient, rang, rasm yoki **video** (qoraytirish, xiralashtirish)
 - Sarlavha, kichik matn, logotip, vaqt chizig‘i

@@ -2,9 +2,16 @@
 // gets its own animated layer. autoLayers() designs the layers from the "Algoritm" analysis.
 import { draw, drawBackground, rng, rgba, TAU, hexToRgb, mediaOf } from './templates.js';
 import { autoColors } from './palette.js';
+import { processFrame } from './gpu/engine.js';
+import { FILTER_IDS } from './gpu/filters.js';
+import { TRANSITIONS } from './gpu/transitions-data.js';
 
 export const SOUNDS = ['bass', 'vocal', 'kick', 'snare', 'hat', 'ohat'];
 export const EFFECTS = ['ring', 'bloom', 'orb', 'bars', 'particles', 'flash', 'wave', 'sparkle', 'streaks', 'zoom', 'shake'];
+// GPU effects that work directly on the picture / video: filters (glfx.js + own) and gl-transitions
+export const GPU_FILTERS = FILTER_IDS.map((id) => 'f:' + id);
+export const GPU_TRANSITIONS = TRANSITIONS.map((t) => 't:' + t.n);
+export const isGpu = (e) => typeof e === 'string' && (e.startsWith('f:') || e.startsWith('t:'));
 export const POSITIONS = ['center', 'top', 'bottom', 'left', 'right', 'full'];
 
 // which effects suit which sound (first = most typical)
@@ -39,13 +46,15 @@ export function detectMood(deep) {
   return { id, bpm: deep.bpm, scores };
 }
 const MOOD_FIT = {
-  aggressive: { kick: ['shake', 'ring', 'flash'], snare: ['flash', 'streaks'], hat: ['sparkle', 'particles'], ohat: ['streaks', 'sparkle'], bass: ['wave', 'bars', 'shake'], vocal: ['wave', 'bloom'] },
-  euphoric: { kick: ['ring', 'orb'], snare: ['particles', 'flash'], hat: ['sparkle', 'bars'], ohat: ['sparkle', 'streaks'], bass: ['bars', 'orb'], vocal: ['bloom', 'particles'] },
-  dark: { kick: ['bloom', 'orb'], snare: ['streaks', 'flash'], hat: ['sparkle'], ohat: ['bloom', 'streaks'], bass: ['wave', 'orb'], vocal: ['wave', 'bloom'] },
-  chill: { kick: ['bloom', 'orb'], snare: ['particles', 'bloom'], hat: ['sparkle'], ohat: ['bloom', 'sparkle'], bass: ['wave', 'orb'], vocal: ['bloom', 'wave'] },
-  epic: { kick: ['zoom', 'ring'], snare: ['flash', 'streaks'], hat: ['sparkle', 'bars'], ohat: ['streaks', 'sparkle'], bass: ['orb', 'bars', 'wave'], vocal: ['bloom', 'particles'] },
-  romantic: { kick: ['orb', 'bloom'], snare: ['particles', 'bloom'], hat: ['sparkle'], ohat: ['bloom', 'sparkle'], bass: ['wave', 'orb'], vocal: ['bloom', 'particles'] },
+  aggressive: { kick: ['t:CrossZoom', 'f:shockwave', 'f:bulge', 't:CameraShake', 'shake'], snare: ['t:GlitchDisplace', 'f:glitch', 't:StripDatamoshGlitch', 't:LightningFlash', 'f:rgbSplit'], hat: ['f:noise', 'sparkle', 'f:rgbWave'], ohat: ['t:LightStreaks', 'streaks', 'f:strobe'], bass: ['f:liquid', 'f:swirl', 'wave'], vocal: ['f:bloom', 'f:grade', 'bloom'] },
+  euphoric: { kick: ['t:Ripple', 'f:bulge', 'ring', 't:ZoomInCircles'], snare: ['t:GlitterDissolve', 'particles', 't:FlashFade', 'f:exposure'], hat: ['sparkle', 'f:hueShift'], ohat: ['t:LightRays', 'f:lightLeak', 'sparkle'], bass: ['bars', 'f:liquid', 'orb'], vocal: ['f:bloom', 'f:lightLeak', 'f:hueShift'] },
+  dark: { kick: ['f:zoomBlur', 'f:pinch', 't:DreamyZoom'], snare: ['t:TvStatic', 't:VhsTracking', 'f:invert', 'f:glitch'], hat: ['f:noise', 'sparkle'], ohat: ['f:crt', 't:HeatHaze'], bass: ['f:liquid', 'f:vignette', 'wave'], vocal: ['f:neonEdge', 'f:bloom', 'f:grade'] },
+  chill: { kick: ['f:bloom', 'orb', 't:Dreamy'], snare: ['t:WaterDrop', 'particles'], hat: ['sparkle', 'f:noise'], ohat: ['f:lightLeak', 'bloom'], bass: ['f:liquid', 'wave'], vocal: ['f:grade', 'f:bloom', 'f:vibrance'] },
+  epic: { kick: ['t:WarpSpeed', 'f:zoomBlur', 'zoom', 't:CrossZoom'], snare: ['t:LightningFlash', 'f:strobe', 't:Shatter'], hat: ['sparkle', 'f:noise'], ohat: ['t:LightStreaks', 'f:lightLeak'], bass: ['f:bulge', 'orb', 'f:swirl'], vocal: ['f:bloom', 'f:grade'] },
+  romantic: { kick: ['f:bloom', 'orb', 't:Dreamy'], snare: ['t:GlowDissolve', 'particles'], hat: ['sparkle'], ohat: ['f:lightLeak', 'bloom'], bass: ['wave', 'f:liquid'], vocal: ['f:bloom', 'f:vibrance', 'f:grade'] },
 };
+// GPU passes that read many pixels: keep at most two of them in one template
+const HEAVY = new Set(['f:bloom', 'f:neonEdge', 'f:blur', 'f:zoomBlur']);
 const MOOD_GAIN = { aggressive: 1.15, euphoric: 1, dark: 0.8, chill: 0.65, epic: 1.1, romantic: 0.75 };
 const MOOD_LIFE = { aggressive: 1.5, euphoric: 2, dark: 2.5, chill: 3, epic: 2, romantic: 3 }; // beats
 const MOOD_HUE = { aggressive: 350, euphoric: 45, dark: 255, chill: 190, epic: 25, romantic: 330 };
@@ -101,6 +110,9 @@ export function autoLayers(deep, o, seed = 1, moodId = null) {
     life,
     rate: Math.max(4, Math.min(24, (deep?.bpm || 120) / 30)),
   }));
+  // at most two heavy GPU passes
+  let heavy = 0;
+  for (const l of layers) if (HEAVY.has(l.effect) && ++heavy > 2) l.effect = (fit[l.sound] || FIT[l.sound]).find((e) => !HEAVY.has(e)) || 'sparkle';
   // at most one camera effect, and only on the strongest low-end sound
   let camera = false;
   for (const l of layers) {
@@ -267,17 +279,44 @@ draw.one = (ctx, W, H, o, f) => {
   const u = Math.min(W, H) / 1080;
   const layers = Array.isArray(o.layers) && o.layers.length ? o.layers : autoLayers(null, o, 1).layers;
   const autoCol = layers.some((L) => L.on && L.colorAuto) ? autoColors(o, f, o.oneMood) : null;
+  const val = (L) => Math.min(1.4, valueOf(f, L.sound) * (L.amount ?? 1) * (o.sens ?? 1));
   // camera layers move the whole picture
   let zoom = 1, dx = 0, dy = 0;
   for (const L of layers) {
     if (!L.on) continue;
-    const v = Math.min(1.4, valueOf(f, L.sound) * (L.amount ?? 1) * (o.sens ?? 1));
+    const v = val(L);
     if (L.effect === 'zoom') zoom += 0.06 * v;
     if (L.effect === 'shake') { const a = 18 * u * v; dx += a * f.bassWave(0); dy += a * f.bassWave(0.004); }
   }
   ctx.save();
   if (zoom !== 1 || dx || dy) { ctx.translate(W / 2 + dx, H / 2 + dy); ctx.scale(zoom, zoom); ctx.translate(-W / 2, -H / 2); }
   drawBackground(ctx, W, H, o, f);
-  for (const L of layers) if (L.on && L.effect !== 'zoom' && L.effect !== 'shake') drawLayer(ctx, W, H, o, f, L, u, autoCol);
+  ctx.restore();
+
+  // GPU effects run on the picture / video itself
+  const steps = [];
+  for (const L of layers) {
+    if (!L.on || !isGpu(L.effect)) continue;
+    const col = hexToRgb((L.colorAuto && autoCol ? autoCol[L.sound] : L.color) || '#ffffff').map((c) => c / 255);
+    const dur = Math.max(0.25, Math.min(0.9, (L.life || 0.6) * 0.8));
+    const recent = f.recent ? f.recent(L.sound, Math.max(dur, 1.2)) : [];
+    const ev = recent.find((e) => (e.s ?? 1) >= 0.2) || null;
+    if (L.effect.startsWith('f:')) {
+      const id = L.effect.slice(2);
+      const age = ev ? f.t - ev.t : 99;
+      const v = id === 'shockwave' ? (ev && age < 0.8 ? Math.max(0.4, val(L)) : 0) : val(L);
+      steps.push({ kind: 'filter', id, v, color: col, age });
+    } else {
+      steps.push({ kind: 'transition', id: L.effect.slice(2), key: L.sound + L.effect, event: ev, dur });
+    }
+  }
+  if (steps.length) {
+    const out = processFrame(ctx.canvas, W, H, f.t, steps);
+    if (out) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(out, 0, 0, W, H); ctx.restore(); }
+  }
+
+  ctx.save();
+  if (zoom !== 1 || dx || dy) { ctx.translate(W / 2 + dx, H / 2 + dy); ctx.scale(zoom, zoom); ctx.translate(-W / 2, -H / 2); }
+  for (const L of layers) if (L.on && !isGpu(L.effect) && L.effect !== 'zoom' && L.effect !== 'shake') drawLayer(ctx, W, H, o, f, L, u, autoCol);
   ctx.restore();
 };

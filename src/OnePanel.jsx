@@ -1,4 +1,4 @@
-import { EFFECTS, POSITIONS } from './one.js';
+import { EFFECTS, POSITIONS, GPU_FILTERS, GPU_TRANSITIONS } from './one.js';
 import { peekAutoColors } from './palette.js';
 import { useEffect, useState } from 'react';
 
@@ -27,7 +27,15 @@ export function LayerEditor({ T, layers, onChange }) {
             {T.sounds[l.sound]}
           </label>
           <select id={`layer-${l.sound}-fx`} value={l.effect} onChange={(e) => upd(i, { effect: e.target.value })} aria-label={T.layerEffect}>
-            {EFFECTS.map((e) => <option key={e} value={e}>{T.effects[e]}</option>)}
+            <optgroup label={`${T.fxGroupFilters} (${GPU_FILTERS.length})`}>
+              {GPU_FILTERS.map((e) => <option key={e} value={e}>{T.gpuFx[e.slice(2)] || e.slice(2)}</option>)}
+            </optgroup>
+            <optgroup label={`${T.fxGroupTransitions} (${GPU_TRANSITIONS.length})`}>
+              {GPU_TRANSITIONS.map((e) => <option key={e} value={e}>{e.slice(2).replace(/([a-z])([A-Z])/g, '$1 $2')}</option>)}
+            </optgroup>
+            <optgroup label={`${T.fxGroupOverlay} (${EFFECTS.length})`}>
+              {EFFECTS.map((e) => <option key={e} value={e}>{T.effects[e]}</option>)}
+            </optgroup>
           </select>
           <select id={`layer-${l.sound}-pos`} value={l.pos} onChange={(e) => upd(i, { pos: e.target.value })} aria-label={T.layerPos}>
             {POSITIONS.map((p) => <option key={p} value={p}>{T.layerPositions[p]}</option>)}
@@ -149,6 +157,7 @@ export default function OnePanel({ T, hasAudio, deepReady, quality, onCheck, onI
             <button onClick={onVariant} disabled={!layers?.length}>{T.variant}</button>
           </div>
           <LayerEditor T={T} layers={layers} onChange={setLayers} />
+          <p className="hint">{T.fxCredits}</p>
         </section>
       </div>
     </div>

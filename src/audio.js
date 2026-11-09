@@ -248,7 +248,7 @@ function deepAt(an, t) {
       if (t >= s.t0 && t < s.t1) { section = { ...s, idx: i, progress: (t - s.t0) / Math.max(0.01, s.t1 - s.t0), prev: d.sections[i - 1] || null }; break; }
     }
     const recent = (kind, w) => {
-      const list = d.events[kind] || [];
+      const list = kind === 'vocal' ? (d._vocEv || (d._vocEv = d.vocals.map((v) => ({ t: v.t0, s: Math.max(0.3, v.conf) })))) : d.events[kind] || [];
       let lo = 0, hi = list.length;
       while (lo < hi) { const m = (lo + hi) >> 1; if (list[m].t <= t) lo = m + 1; else hi = m; }
       const out = [];

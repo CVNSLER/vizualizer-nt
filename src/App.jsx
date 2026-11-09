@@ -73,6 +73,7 @@ export default function App() {
 
   useEffect(() => { try { localStorage.setItem('viz-settings', JSON.stringify(s)); } catch { /* ignore */ } }, [s]);
   useEffect(() => { try { localStorage.setItem('viz-lang', lang); } catch { /* ignore */ } }, [lang]);
+  useEffect(() => { window.__vizAudio = audio; }, [audio]); // read by automated checks
 
   const options = useMemo(() => ({ ...s, ...images }), [s, images]);
   useEffect(() => { loadFont(s.titleFont); loadFont(s.subFont); }, [s.titleFont, s.subFont]);
