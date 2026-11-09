@@ -5,7 +5,7 @@ import { defaultStudio, EQ_DEFAULT, FX_MODES } from './smart.js';
 const fmtDb = (v) => `${v > 0 ? '+' : ''}${(Math.round(v * 10) / 10).toFixed(1)} dB`;
 const DELAY_MS = 3000; // fader moves are applied 3 s after the last change
 
-export default function StudioPanel({ T, studio, playing, onTogglePlay, hasEnhanced, enhancing, onEnhance, onClose }) {
+export default function StudioPanel({ T, studio, playing, onTogglePlay, hasEnhanced, enhancing, onEnhance, listen, setListen, onClose }) {
   const S = T.st;
   const [tab, setTab] = useState('mixer');
   return (
@@ -15,7 +15,11 @@ export default function StudioPanel({ T, studio, playing, onTogglePlay, hasEnhan
           <h2>{S.title}</h2>
           <div className="studio-head-r">
             <button className="play small" onClick={onTogglePlay} aria-label="play">{playing ? '❚❚' : '▶'}</button>
-            <span className={`studio-state ${studio.active ? 'on' : ''}`}>{studio.active ? S.active : S.inactive}</span>
+            <div className="seg ab-studio">
+              <button id="studio-ab-orig" className={listen === 'orig' ? 'on' : ''} onClick={() => setListen('orig')}>{T.original}</button>
+              <button id="studio-ab-studio" className={listen === 'studio' ? 'on' : ''} onClick={() => setListen('studio')}>{T.studioBtn}</button>
+            </div>
+            <span className={`studio-state ${studio.active && listen === 'studio' ? 'on' : ''}`}>{listen !== 'studio' ? S.listenOrig : studio.active ? S.active : S.inactive}</span>
             <button onClick={() => studio.setSt(defaultStudio())}>{S.resetAll}</button>
             <button onClick={onClose}>{T.close}</button>
           </div>
@@ -171,7 +175,7 @@ function ParamEq({ S, studio }) {
         g.fillStyle = 'rgba(124,92,255,.16)'; g.fill();
       }
       // EQ curve
-      const k = JSON.stringify(eq) + W;
+      const k = JSON.stringify([eq, st.autoEq.bands]) + W;
       if (k !== respKey || W !== lastW) {
         freqs = new Float32Array(Math.ceil(W / 2)).map((_, i) => x2f(i * 2, W));
         resp = engine.eqResponse(st, freqs); respKey = k; lastW = W;
@@ -180,6 +184,11 @@ function ParamEq({ S, studio }) {
       g.lineWidth = 2; g.beginPath();
       for (let i = 0; i < resp.length; i++) { const y = yOf(20 * Math.log10(resp[i] + 1e-9)); if (i) g.lineTo(i * 2, y); else g.moveTo(0, y); }
       g.stroke();
+      // automatic cuts
+      for (const ab of st.autoEq.bands) {
+        const x = fx2(ab.f, W), y = yOf(ab.g);
+        g.fillStyle = '#ffd166'; g.beginPath(); g.moveTo(x, y - 6); g.lineTo(x + 6, y); g.lineTo(x, y + 6); g.lineTo(x - 6, y); g.closePath(); g.fill();
+      }
       // handles
       eq.forEach((b, i) => {
         const x = fx2(b.f, W), y = b.type === 'highpass' ? yOf(0) : yOf(b.on ? b.g : 0);
@@ -257,8 +266,19 @@ function ParamEq({ S, studio }) {
           <label className="param">dB<input type="number" min={-18} max={18} step={0.1} value={b.g} disabled={b.type === 'highpass' || b.type === 'notch'} onChange={(e) => setBand(sel, { g: Math.max(-18, Math.min(18, +e.target.value || 0)) })} /></label>
           <label className="param">Q<input type="number" min={0.2} max={18} step={0.05} value={b.q} onChange={(e) => setBand(sel, { q: Math.max(0.2, Math.min(18, +e.target.value || 1)) })} /></label>
           <button className={hunt === sel ? 'on' : ''} onClick={() => toggleHunt(sel)}>{hunt === sel ? S.huntStop : S.huntStart}</button>
+          <button id="eq-auto" className={`auto-btn ${st.autoEq.on ? 'on' : ''}`} onClick={studio.toggleAuto} title={S.autoHint}>
+            {studio.autoBusy ? S.autoBusy : st.autoEq.on ? S.autoOn : S.autoOff}
+          </button>
         </div>
       )}
+      {st.autoEq.bands.length > 0 && (
+        <div id="eq-auto-list" className="auto-list">
+          <b>{S.autoFound}</b>
+          {st.autoEq.bands.map((x) => <span key={x.f}>{fmtF(x.f)} Hz {x.g.toFixed(1)} dB <em>Q {x.q}</em></span>)}
+          <button onClick={() => setSt((s) => ({ ...s, autoEq: { on: false, bands: [] } }))}>{S.autoClear}</button>
+        </div>
+      )}
+      {st.autoEq.on && !studio.autoBusy && st.autoEq.bands.length === 0 && st.autoEq.at && <p className="hint okc">{S.autoNone}</p>}
       {hunt != null && <p className="warn">{S.huntHint}</p>}
     </div>
   );

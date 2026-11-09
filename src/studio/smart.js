@@ -23,13 +23,15 @@ export function defaultStudio() {
     master: { gain: 0, smart: true },
     mix: { gain: 0, pan: 0 },
     eq: EQ_DEFAULT.map((b) => ({ ...b })),
+    autoEq: { on: false, bands: [] }, // bands found by the automatic "unpleasant sound" analysis
     fxMode: 'orig',
     fx: { orig: [], enh: [], post: [] },
   };
 }
 
 export const eqActive = (eq) => eq.some((b) => b.on && (b.type === 'highpass' ? b.f > 21 : Math.abs(b.g) > 0.05));
-export const mixerNeutral = (st) => st.master.gain === 0 && st.mix.gain === 0 && st.mix.pan === 0 && !eqActive(st.eq);
+export const AUTO_EQ_MAX = 8;
+export const mixerNeutral = (st) => st.master.gain === 0 && st.mix.gain === 0 && st.mix.pan === 0 && !eqActive(st.eq) && !st.autoEq?.bands.length;
 
 /**
  * stats: { peakDb, loudDb, lowFrac } of the source that is playing

@@ -1,10 +1,11 @@
-// Background job for the studio: level statistics of a buffer.
-import { levelStats } from './dsp.js';
+// Background jobs for the studio: level statistics and the unpleasant-sound finder.
+import { levelStats, findHarsh } from './dsp.js';
 
 self.onmessage = (e) => {
-  const { id, chs, fs } = e.data;
+  const { id, cmd, chs, fs } = e.data;
   try {
-    self.postMessage({ id, type: 'done', result: levelStats(chs, fs) });
+    const result = cmd === 'harsh' ? findHarsh(chs, fs, e.data.max) : levelStats(chs, fs);
+    self.postMessage({ id, type: 'done', result });
   } catch (err) {
     self.postMessage({ id, type: 'error', message: String(err?.message || err) });
   }

@@ -23,3 +23,7 @@ export function statsJob(buffer) {
   const chs = copyChs(buffer);
   return job({ cmd: 'stats', chs, fs: buffer.sampleRate }, chs.map((c) => c.buffer));
 }
+export function harshJob(buffer, max = 6) {
+  const chs = copyChs(buffer);
+  return job({ cmd: 'harsh', chs, fs: buffer.sampleRate, max }, chs.map((c) => c.buffer));
+}

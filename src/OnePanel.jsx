@@ -2,9 +2,31 @@ import { useEffect, useState } from 'react';
 import { STAGES } from './quality/stages.js';
 
 const LEVEL_ICON = { bad: '●', warn: '●', info: '●' };
+// which way is better for each issue's value (+1: higher is better, -1: lower is better)
+const UP = new Set(['quiet', 'weakPunch', 'squashed', 'phase', 'wideBass', 'narrow', 'mono', 'dull', 'lack_band']);
+const NO_FIX = new Set(['squashed', 'phase', 'mono', 'leadSilence', 'trailSilence']);
+const baseId = (id) => id.replace(/^(too|lack)_.*/, '$1_band');
+
+/** Result of the enhancement for one issue found before: ok (gone), part, same, bad (worse). */
+function issueStatus(i, afterIssues) {
+  const still = afterIssues.find((x) => x.id === i.id);
+  if (!still) return { s: 'ok' };
+  if (NO_FIX.has(baseId(i.id)) || !i.fix) return { s: 'noFix', still };
+  const dir = UP.has(baseId(i.id)) ? 1 : -1;
+  const rel = (dir * (still.value - i.value)) / Math.max(1, Math.abs(i.value));
+  return { s: rel > 0.3 ? 'part' : rel < -0.05 ? 'bad' : 'same', still };
+}
+
+function Countdown({ until, label }) {
+  const [, tick] = useState(0);
+  useEffect(() => { const id = setInterval(() => tick((x) => x + 1), 100); return () => clearInterval(id); }, []);
+  const left = until - Date.now();
+  if (left <= 0) return null;
+  return <span id="q-countdown" className="countdown">{label} {(left / 1000).toFixed(1)} s</span>;
+}
 const fmt1 = (v) => (Math.round(v * 10) / 10).toFixed(1);
 
-export default function OnePanel({ T, hasAudio, quality, enhanced, onCheck, onImprove, onRefine, onPickVersion, target, setTarget, qSet, setQSet, useEnhanced, setUseEnhanced, onClose }) {
+export default function OnePanel({ T, hasAudio, quality, enhanced, onCheck, onImprove, onRefine, onPickVersion, target, setTarget, qSet, setQSet, useEnhanced, setUseEnhanced, qPending, onClose }) {
   const q = quality;
   const Q = T.q;
   const [strength, setStrength] = useState(Math.round((qSet.strength ?? 1) * 100));
@@ -54,11 +76,29 @@ export default function OnePanel({ T, hasAudio, quality, enhanced, onCheck, onIm
                 </div>
                 <ul className="issues">
                   {q.result.issues.length === 0 && <li className="info">{T.noIssues}</li>}
-                  {q.result.issues.map((i) => (
-                    <li key={i.id} className={i.level}>
-                      <span className="dot">{LEVEL_ICON[i.level]}</span>
-                      <span>{issueText(i)}</span>
-                      <em>{i.fix ? T.fixes[i.fix] : T.noAutoFix}</em>
+                  {q.result.issues.map((i) => {
+                    const st = enhanced ? issueStatus(i, enhanced.issues || []) : null;
+                    const info = T.issueInfo[baseId(i.id)];
+                    return (
+                      <li key={i.id} className={`${i.level} ${st ? `st-${st.s}` : ''}`}>
+                        <div className="issue-row">
+                          <span className="dot">{st ? <i className={`stmark ${st.s}`} /> : LEVEL_ICON[i.level]}</span>
+                          <span>{issueText(i)}</span>
+                          <em>{st ? T.statusText[st.s] : i.fix ? T.fixes[i.fix] : T.noAutoFix}</em>
+                        </div>
+                        {info && (
+                          <div className="issue-more">
+                            <div><b>{T.harmLabel}:</b> {info[0]}</div>
+                            {st && <div><b>{T.gainLabel}:</b> {st.s === 'ok' || st.s === 'part' ? info[1] : st.s === 'noFix' ? info[1] : st.s === 'bad' ? T.statusText.bad : T.statusText.same}{st.still ? <em className="ba"> · {T.beforeAfter}: {issueText(i)} → {issueText(st.still)}</em> : null}</div>}
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                  {enhanced && (enhanced.issues || []).filter((x) => !q.result.issues.some((i) => i.id === x.id) && x.level !== 'info').map((x) => (
+                    <li key={`new-${x.id}`} className="bad st-bad">
+                      <div className="issue-row"><span className="dot"><i className="stmark bad" /></span><span>{issueText(x)}</span><em>{T.statusText.new}</em></div>
+                      {T.issueInfo[baseId(x.id)] && <div className="issue-more"><div><b>{T.harmLabel}:</b> {T.issueInfo[baseId(x.id)][0]}</div></div>}
                     </li>
                   ))}
                 </ul>
@@ -80,9 +120,7 @@ export default function OnePanel({ T, hasAudio, quality, enhanced, onCheck, onIm
                   <label className="row">{Q.strength}
                     <span className="rng">
                       <input id="q-strength" type="range" min={0} max={100} step={1} value={strength}
-                        onChange={(e) => setStrength(+e.target.value)}
-                        onPointerUp={() => setQSet((x) => ({ ...x, strength: strength / 100 }))}
-                        onKeyUp={() => setQSet((x) => ({ ...x, strength: strength / 100 }))} />
+                        onChange={(e) => { const v = +e.target.value; setStrength(v); setQSet((x) => ({ ...x, strength: v / 100 })); }} />
                       <em>{strength}%</em>
                     </span>
                   </label>
@@ -104,6 +142,7 @@ export default function OnePanel({ T, hasAudio, quality, enhanced, onCheck, onIm
                     </div>
                   )}
                 </div>
+                {enhanced && qPending > Date.now() && <Countdown until={qPending} label={T.applyIn} />}
                 {q.note?.kind === 'same' && <p id="q-note" className="hint okc">{q.note.only ? Q.sameStage : Q.sameAll}</p>}
                 {enhanced && <p className="hint">{Q.againHint}</p>}
 

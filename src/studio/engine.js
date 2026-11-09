@@ -2,7 +2,7 @@
 // player to keep in sync). Offline: the same graph renders the export.
 //   source -> [effects] -> pan -> fader -> EQ (8 bands) -> smart shelves -> master -> comp -> limiter
 import { buildChain, chainKey, unMakeup } from './fx.js';
-import { smartPlan, mixerNeutral, CEIL_DB } from './smart.js';
+import { smartPlan, mixerNeutral, CEIL_DB, AUTO_EQ_MAX } from './smart.js';
 import { limit } from './dsp.js';
 import { LIMITER_SRC } from './limiter-worklet.js';
 
@@ -46,6 +46,7 @@ function buildMixer(ctx, st, plan, limNode = null) {
   input.channelCount = 2; input.channelCountMode = 'explicit'; input.channelInterpretation = 'speakers';
   const pan = ctx.createStereoPanner(), fader = ctx.createGain();
   const eq = st.eq.map((b) => biquad(ctx, b.type, b.f));
+  const auto = Array.from({ length: AUTO_EQ_MAX }, () => biquad(ctx, 'peaking', 1000, 1));
   const hp = biquad(ctx, 'highpass', 20), lowShelf = biquad(ctx, 'lowshelf', 120), highShelf = biquad(ctx, 'highshelf', 8000);
   const master = ctx.createGain();
   const comp = ctx.createDynamicsCompressor(), compMk = ctx.createGain();
@@ -53,7 +54,7 @@ function buildMixer(ctx, st, plan, limNode = null) {
   lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.001;
   const clip = softClip(ctx);
   let last = input.connect(pan).connect(fader);
-  for (const b of eq) last = last.connect(b);
+  for (const b of [...eq, ...auto]) last = last.connect(b);
   last = last.connect(hp).connect(lowShelf).connect(highShelf).connect(master).connect(comp).connect(compMk);
   // live: a real look-ahead limiter (AudioWorklet) when available; otherwise a fast compressor
   if (limNode) last.connect(limNode).connect(clip);
@@ -64,6 +65,7 @@ function buildMixer(ctx, st, plan, limNode = null) {
       setP(pan.pan, st2.mix.pan, ctx);
       setP(fader.gain, dB(st2.mix.gain), ctx);
       st2.eq.forEach((b, i) => eq[i] && setEqBand(eq[i], b, ctx));
+      auto.forEach((n, i) => { const b = st2.autoEq?.bands[i]; setEqBand(n, b ? { type: 'peaking', on: true, ...b } : { type: 'peaking', on: false, f: 1000, g: 0, q: 1 }, ctx); });
       setP(hp.frequency, plan2.hp, ctx);
       setP(lowShelf.gain, plan2.lowShelf, ctx);
       setP(highShelf.gain, plan2.highShelf, ctx);
@@ -137,12 +139,13 @@ export class StudioEngine {
   resume() { if (this.ctx && this.ctx.state !== 'running') this.ctx.resume().catch(() => {}); }
   get attached() { return !!this.el; }
   /** st: studio state, fx: effects to run live, plan: smartPlan(), env: { bpm } */
-  set(st, fx, plan, env) {
-    this.args = [st, fx, plan, env];
+  set(st, fx, plan, env, bypass = false) {
+    this.args = [st, fx, plan, env, bypass];
     if (!this.ctx || !this.el) return;
     const ctx = this.ctx;
     const live = fx.filter((f) => f.on);
-    const neutral = !live.length && mixerNeutral(st);
+    // bypass: "Asl" / "Yaxshilangan" are listened to exactly as they are
+    const neutral = bypass || (!live.length && mixerNeutral(st));
     setP(this.dry.gain, neutral ? 1 : 0, ctx);
     setP(this.wet.gain, neutral ? 0 : 1, ctx);
     const env2 = { ...env, smart: plan };
@@ -179,7 +182,7 @@ export class StudioEngine {
   eqResponse(st, freqs) {
     const ctx = this._ensure();
     const mag = new Float32Array(freqs.length).fill(1), m = new Float32Array(freqs.length), ph = new Float32Array(freqs.length);
-    for (const b of st.eq) {
+    for (const b of [...st.eq, ...(st.autoEq?.bands || []).map((x) => ({ type: 'peaking', on: true, ...x }))]) {
       const n = biquad(ctx, b.type, b.f);
       setEqBand(n, b, { state: 'suspended' });
       n.getFrequencyResponse(freqs, m, ph);

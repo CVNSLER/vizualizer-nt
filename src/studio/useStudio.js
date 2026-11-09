@@ -5,12 +5,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { StudioEngine, renderStudio, renderFx } from './engine.js';
 import { defaultStudio, mixerNeutral, smartPlan } from './smart.js';
-import { statsJob } from './jobs.js';
+import { statsJob, harshJob } from './jobs.js';
 import { toWavUrl } from '../quality/index.js';
 
 const fxKey = (list) => JSON.stringify(list.filter((f) => f.on).map((f) => [f.type, f.p]));
 
-export function useStudio({ audio, audioRef, origBuf, enh, useEnhanced, bpm, enhanceFx, qKey }) {
+export function useStudio({ audio, audioRef, origBuf, enh, listen, bpm, enhanceFx, qKey }) {
+  const on = listen === 'studio'; // "Asl" and "Yaxshilangan" are always heard untouched
   const engineRef = useRef(null);
   if (!engineRef.current) { engineRef.current = new StudioEngine(); window.__vizEngine = engineRef.current; } // read by automated checks
   const engine = engineRef.current;
@@ -29,14 +30,14 @@ export function useStudio({ audio, audioRef, origBuf, enh, useEnhanced, bpm, enh
   const fresh = !!(result && !result.busy && result.key === key);
   const liveFx = useMemo(() => (hasFx && (mode === 'enh' || !fresh) ? list : []), [hasFx, mode, fresh, list]);
 
-  const srcUrl = !audio || !hasFx ? null
+  // what the studio starts from: panel 2 = the enhanced music, panels 1/3 = the original or their result
+  const srcUrl = !audio ? null
     : mode === 'enh' ? (enh ? enh.url : audio.url)
       : fresh ? result.url : audio.url;
   const baseBuffer = !origBuf ? null
-    : !hasFx ? (useEnhanced && enh ? enh.buffer : origBuf)
-      : mode === 'enh' ? (enh ? enh.buffer : origBuf)
-        : fresh ? result.buffer : origBuf;
-  const active = !!audio && (hasFx || !mixerNeutral(st));
+    : mode === 'enh' ? (enh ? enh.buffer : origBuf)
+      : fresh ? result.buffer : origBuf;
+  const active = !!audio && (hasFx || !mixerNeutral(st)); // the studio has changes
 
   // level statistics of what is playing, for the smart mixer
   useEffect(() => {
@@ -48,9 +49,40 @@ export function useStudio({ audio, audioRef, origBuf, enh, useEnhanced, bpm, enh
   const plan = useMemo(() => smartPlan(st, stats, bpm || 120, liveFx), [st, stats, bpm, liveFx]);
 
   useEffect(() => {
-    if (active && !engine.attached) engine.attach(audioRef.current);
-    engine.set(st, liveFx, plan, { bpm: bpm || 120 });
-  }, [active, st, plan, liveFx, bpm, audio]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (on && active && !engine.attached) engine.attach(audioRef.current);
+    engine.set(st, liveFx, plan, { bpm: bpm || 120 }, !on);
+  }, [on, active, st, plan, liveFx, bpm, audio]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- automatic EQ: find unpleasant resonances in the sound as it is heard now and cut them.
+  // While "Avto" is on it follows changes (3 s after the last one); switched off, the cuts stay.
+  const [autoBusy, setAutoBusy] = useState(false);
+  const autoRun = useRef(0);
+  const manualKey = JSON.stringify([st.eq, st.master, st.mix, fxKey(liveFx), mode, fresh]);
+  async function analyse() {
+    if (!baseBuffer) return;
+    const id = ++autoRun.current;
+    setAutoBusy(true);
+    try {
+      const plain = { ...st, autoEq: { on: false, bands: [] } };
+      const s0 = stats || await statsJob(baseBuffer);
+      const heard = await renderStudio(baseBuffer, plain, liveFx, s0, { bpm: bpm || 120 });
+      const bands = await harshJob(heard, 6);
+      if (id === autoRun.current) setSt((s) => ({ ...s, autoEq: { ...s.autoEq, bands, at: Date.now() } }));
+    } catch { /* keep the old result */ }
+    if (id === autoRun.current) setAutoBusy(false);
+  }
+  function toggleAuto() {
+    if (st.autoEq.on) { autoRun.current++; setAutoBusy(false); setSt((s) => ({ ...s, autoEq: { ...s.autoEq, on: false } })); return; }
+    setSt((s) => ({ ...s, autoEq: { ...s.autoEq, on: true } }));
+    analyse();
+  }
+  const firstAuto = useRef(true);
+  useEffect(() => {
+    if (firstAuto.current) { firstAuto.current = false; return undefined; }
+    if (!st.autoEq.on) return undefined;
+    const t = setTimeout(analyse, 3000);
+    return () => clearTimeout(t);
+  }, [manualKey, baseBuffer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- effects + enhancement (panels 1 and 3)
   const jobRef = useRef(0);
@@ -76,7 +108,7 @@ export function useStudio({ audio, audioRef, origBuf, enh, useEnhanced, bpm, enh
 
   /** What the user hears, rendered offline for the export (null = use the plain music). */
   async function render(onProgress) {
-    if (!active) return null;
+    if (!active || !on) return null;
     let base = baseBuffer, fx = liveFx;
     if (hasFx && mode !== 'enh' && !fresh) {
       const r = await apply();
@@ -87,7 +119,7 @@ export function useStudio({ audio, audioRef, origBuf, enh, useEnhanced, bpm, enh
   }
 
   return {
-    st, setSt, stats, plan, active, engine, srcUrl, hasFx, mode, fresh, result, apply, render,
-    resume: () => { if (active && !engine.attached) engine.attach(audioRef.current); engine.resume(); },
+    st, setSt, stats, plan, active, on, engine, srcUrl, baseBuffer, hasFx, mode, fresh, result, apply, render, toggleAuto, autoBusy,
+    resume: () => { if (on && active && !engine.attached) engine.attach(audioRef.current); engine.resume(); },
   };
 }
