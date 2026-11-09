@@ -118,8 +118,14 @@ export function useStudio({ audio, audioRef, origBuf, enh, listen, bpm, enhanceF
     return renderStudio(base, st, fx, s, { bpm: bpm || 120 }, onProgress);
   }
 
+  // which music the studio starts from: the original (panels 1 and 3) or the enhanced one (panel 2)
+  const source = mode === 'enh' ? 'enh' : 'orig';
+  function setSource(src) {
+    setSt((s) => ({ ...s, fxMode: src === 'enh' ? 'enh' : s.fxMode === 'enh' ? 'orig' : s.fxMode }));
+  }
+
   return {
-    st, setSt, stats, plan, active, on, engine, srcUrl, baseBuffer, hasFx, mode, fresh, result, apply, render, toggleAuto, autoBusy,
+    source, setSource, st, setSt, stats, plan, active, on, engine, srcUrl, baseBuffer, hasFx, mode, fresh, result, apply, render, toggleAuto, autoBusy,
     resume: () => { if (on && active && !engine.attached) engine.attach(audioRef.current); engine.resume(); },
   };
 }

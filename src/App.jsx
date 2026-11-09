@@ -403,7 +403,11 @@ export default function App() {
             <b>{T.oneBtn}</b>
             <small>{quality.status === 'running' ? T.qualityRunning : quality.result ? `${T.scoreLabel}: ${enhanced ? `${quality.result.score} → ${enhanced.score}` : quality.result.score}` : T.oneHint}{useEnhanced && enhanced ? ` · ${T.enhanced}` : ''}</small>
           </button>
-          <button id="studio-btn" className="algo-btn" onClick={() => { setListen('studio'); studio.resume(); setStudioOpen(true); }} disabled={!audio}>
+          <button id="studio-btn" className="algo-btn" onClick={() => {
+            // the studio starts from what was being listened to: "Yaxshilangan" -> the enhanced music
+            if (listen === 'enh' && enhanced) studio.setSource('enh');
+            setListen('studio'); studio.resume(); setStudioOpen(true);
+          }} disabled={!audio}>
             <b>{T.studioBtn}</b>
             <small>{studio.active ? T.st.active : T.studioHint}</small>
           </button>

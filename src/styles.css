@@ -328,3 +328,7 @@ button.link { background: none; border: 0; color: var(--accent2); padding: 0; te
 .auto-list button { font-size: 12px; padding: 3px 8px; }
 .ab-studio { margin: 0; }
 .ab-studio button { padding: 5px 10px; }
+
+.studio-source { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; padding: 8px 10px; background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; }
+.studio-source .seg { margin: 0; }
+.studio-source .hint { margin: 0; flex: 1; min-width: 200px; }

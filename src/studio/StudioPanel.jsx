@@ -17,12 +17,23 @@ export default function StudioPanel({ T, studio, playing, onTogglePlay, hasEnhan
             <button className="play small" onClick={onTogglePlay} aria-label="play">{playing ? '❚❚' : '▶'}</button>
             <div className="seg ab-studio">
               <button id="studio-ab-orig" className={listen === 'orig' ? 'on' : ''} onClick={() => setListen('orig')}>{T.original}</button>
+              {hasEnhanced && <button id="studio-ab-enh" className={listen === 'enh' ? 'on' : ''} onClick={() => setListen('enh')}>{T.enhanced}</button>}
               <button id="studio-ab-studio" className={listen === 'studio' ? 'on' : ''} onClick={() => setListen('studio')}>{T.studioBtn}</button>
             </div>
             <span className={`studio-state ${studio.active && listen === 'studio' ? 'on' : ''}`}>{listen !== 'studio' ? S.listenOrig : studio.active ? S.active : S.inactive}</span>
             <button onClick={() => studio.setSt(defaultStudio())}>{S.resetAll}</button>
             <button onClick={onClose}>{T.close}</button>
           </div>
+        </div>
+        <div className="studio-source">
+          <span>{S.source}</span>
+          <div className="seg">
+            <button id="src-orig" className={studio.source === 'orig' ? 'on' : ''} onClick={() => { studio.setSource('orig'); setListen('studio'); }}>{T.original}</button>
+            <button id="src-enh" className={studio.source === 'enh' ? 'on' : ''} onClick={() => { studio.setSource('enh'); setListen('studio'); if (!hasEnhanced) onEnhance(); }} disabled={enhancing}>
+              {enhancing && studio.source === 'enh' && !hasEnhanced ? S.enhancing : T.enhanced}
+            </button>
+          </div>
+          <small className="hint">{studio.source === 'enh' ? (hasEnhanced ? S.sourceEnh : S.needEnhanced) : S.sourceOrig}</small>
         </div>
         <div className="seg studio-tabs">
           {Object.entries(S.tabs).map(([k, l]) => <button key={k} id={`studio-tab-${k}`} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}
