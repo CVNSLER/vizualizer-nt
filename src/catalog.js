@@ -1,4 +1,4 @@
-import { draw, drawOverlay } from './templates.js';
+import { draw, drawOverlay, drawBackground } from './templates.js';
 import './templates2.js';
 
 // Template gallery, grouped by style
@@ -21,7 +21,8 @@ export const PALETTES = [
 export function renderFrame(ctx, W, H, o, f, duration) {
   ctx.save();
   ctx.clearRect(0, 0, W, H);
-  (draw[o.template] || draw.ring)(ctx, W, H, o, f);
+  if (o.template === 'none') drawBackground(ctx, W, H, o, f); // background + its effects only
+  else (draw[o.template] || draw.ring)(ctx, W, H, o, f);
   ctx.restore();
   ctx.save();
   // album template draws its own title block

@@ -211,12 +211,14 @@ export default function App() {
         </Section>
 
         <Section title={T.template}>
+          <button className={`tpl tpl-none ${s.template === 'none' ? 'on' : ''}`} onClick={() => set('template', 'none')}>{T.tplNone}</button>
+          <p className="hint">{T.tplOffHint}</p>
           {CATEGORIES.map((c) => (
             <div key={c.id} className="cat">
               <div className="cat-name">{T.cat[c.id]}</div>
               <div className="tpl-grid">
                 {c.items.map((k) => (
-                  <button key={k} className={`tpl ${s.template === k ? 'on' : ''}`} onClick={() => set('template', k)}>{T.tpl[k]}</button>
+                  <button key={k} className={`tpl ${s.template === k ? 'on' : ''}`} onClick={() => set('template', s.template === k ? 'none' : k)} title={s.template === k ? T.tplOffHint : ''}>{T.tpl[k]}</button>
                 ))}
               </div>
             </div>
