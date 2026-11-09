@@ -199,6 +199,199 @@ function spectrum(mono, fs) {
   return { rel, frames, oct: oct.map((v) => v - o1k) };
 }
 
+
+// ---------------------------------------------------------------- clipping: detect + repair
+function findClips(c) {
+  let pk = 0; for (let i = 0; i < c.length; i++) { const a = Math.abs(c[i]); if (a > pk) pk = a; }
+  const lvl = pk * 0.9, runs = [];
+  if (pk < 0.05) return runs;
+  // digital clipping = 3+ samples with exactly the same value at the ceiling; a smooth sub-bass
+  // crest also has near-equal neighbours, so the tolerance is tiny and one pair is not enough
+  const tol = pk * 1e-6;
+  for (let i = 1; i < c.length; i++) {
+    if (Math.abs(c[i]) >= lvl && Math.abs(c[i] - c[i - 1]) <= tol) {
+      let j = i; while (j + 1 < c.length && Math.abs(c[j + 1] - c[i]) <= tol) j++;
+      if (j - i + 2 >= 3) runs.push([i - 1, j]);
+      i = j;
+    }
+  }
+  return runs;
+}
+// Rebuild flat tops by AR interpolation (Janssen-style): learn a short linear-prediction model
+// from the audio around each clipped run, then pick the missing samples that make the
+// prediction error smallest, keeping them at least as loud as the clipped value.
+function levinson(r, p) {
+  const a = new Float64Array(p + 1); a[0] = 1;
+  let e = r[0] || 1e-12;
+  for (let i = 1; i <= p; i++) {
+    let acc = r[i]; for (let j = 1; j < i; j++) acc += a[j] * r[i - j];
+    const k = -acc / e;
+    const prev = a.slice();
+    for (let j = 1; j < i; j++) a[j] = prev[j] + k * prev[i - j];
+    a[i] = k; e *= 1 - k * k;
+    if (e <= 1e-12) break;
+  }
+  return a;
+}
+function solveN(M, v) {
+  const n = v.length, A = M.map((r, i) => [...r, v[i]]);
+  for (let c = 0; c < n; c++) {
+    let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    if (Math.abs(A[p][c]) < 1e-14) return null;
+    [A[c], A[p]] = [A[p], A[c]];
+    for (let r = c + 1; r < n; r++) { const k = A[r][c] / A[c][c]; if (k) for (let q = c; q <= n; q++) A[r][q] -= k * A[c][q]; }
+  }
+  const x = new Array(n).fill(0);
+  for (let r = n - 1; r >= 0; r--) { let s2 = A[r][n]; for (let q = r + 1; q < n; q++) s2 -= A[r][q] * x[q]; x[r] = s2 / A[r][r]; }
+  return x;
+}
+function declip(c, maxRun = 32) {
+  const y = Float32Array.from(c), runs = findClips(c);
+  const P = 24, CTX = 384;
+  let repaired = 0;
+  for (const [a, b] of runs) {
+    const len = b - a + 1;
+    if (len > maxRun || a < CTX || b > c.length - CTX - 1) continue;
+    const sign = Math.sign(c[a]) || 1, flat = Math.abs(c[a]);
+    // AR model from the context (autocorrelation with a Hann window)
+    const s0 = a - CTX, s1 = b + CTX, W = s1 - s0 + 1;
+    const r = new Float64Array(P + 1);
+    for (let k = 0; k <= P; k++) {
+      let acc = 0;
+      for (let t = s0 + k; t <= s1; t++) {
+        const w1 = 0.5 - 0.5 * Math.cos((2 * Math.PI * (t - s0)) / W), w2 = 0.5 - 0.5 * Math.cos((2 * Math.PI * (t - k - s0)) / W);
+        acc += y[t] * w1 * y[t - k] * w2;
+      }
+      r[k] = acc;
+    }
+    r[0] *= 1.0001; // tiny ridge for stability
+    const ar = levinson(r, P);
+    // prediction-error rows covering the run: e[t] = sum_k ar[k] x[t-k], t in [a, b+P]
+    const cols = len, M = Array.from({ length: cols }, () => new Array(cols).fill(0)), v = new Array(cols).fill(0);
+    for (let t = a; t <= b + P; t++) {
+      const rowU = new Array(cols).fill(0);
+      let known = 0;
+      for (let k = 0; k <= P; k++) {
+        const idx = t - k;
+        if (idx >= a && idx <= b) rowU[idx - a] += ar[k];
+        else known += ar[k] * y[idx];
+      }
+      for (let i2 = 0; i2 < cols; i2++) { if (!rowU[i2]) continue; v[i2] -= rowU[i2] * known; for (let j2 = 0; j2 < cols; j2++) M[i2][j2] += rowU[i2] * rowU[j2]; }
+    }
+    const sol = solveN(M, v);
+    if (!sol) continue;
+    for (let i2 = 0; i2 < cols; i2++) y[a + i2] = sign * Math.min(flat * 3, Math.max(flat, sign * sol[i2]));
+    repaired++;
+  }
+  return { y, repaired };
+}
+function solve4(A, b) {
+  const m = A.map((r, i) => [...r, b[i]]);
+  for (let c = 0; c < 4; c++) {
+    let p = c; for (let r = c + 1; r < 4; r++) if (Math.abs(m[r][c]) > Math.abs(m[p][c])) p = r;
+    if (Math.abs(m[p][c]) < 1e-12) return null;
+    [m[c], m[p]] = [m[p], m[c]];
+    for (let r = 0; r < 4; r++) if (r !== c) { const k = m[r][c] / m[c][c]; for (let q = c; q < 5; q++) m[r][q] -= k * m[c][q]; }
+  }
+  return m.map((r, i) => r[4] / r[i]);
+}
+
+// ---------------------------------------------------------------- hiss: measure + spectral denoise
+const DN = 2048, DH = 512;
+const DWIN = new Float32Array(DN).map((_, i) => 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / DN));
+// per-bin noise profile = 10th percentile of magnitude over time (music comes and goes, hiss stays)
+function noiseProfile(mono, step = 4) {
+  const re = new Float32Array(DN), im = new Float32Array(DN), rows = [];
+  for (let s = 0, f = 0; s + DN <= mono.length; s += DH, f++) {
+    if (f % step) continue;
+    for (let i = 0; i < DN; i++) { re[i] = mono[s + i] * DWIN[i]; im[i] = 0; }
+    fftMag(re, im);
+    const m = new Float32Array(DN / 2); for (let k = 0; k < DN / 2; k++) m[k] = Math.hypot(re[k], im[k]); rows.push(m);
+  }
+  const p10 = new Float32Array(DN / 2), p50 = new Float32Array(DN / 2), col = new Float32Array(rows.length);
+  for (let k = 0; k < DN / 2; k++) {
+    for (let r = 0; r < rows.length; r++) col[r] = rows[r][k];
+    col.sort();
+    p10[k] = col[Math.floor(rows.length * 0.1)] || 0; p50[k] = col[Math.floor(rows.length * 0.5)] || 0;
+  }
+  return { p10, p50 };
+}
+// hiss: the quietest moments above 4 kHz are still close to the typical level, and flat across bins
+function hissLevel(mono, fs) {
+  const { p10, p50 } = noiseProfile(mono, 6);
+  const k0 = Math.round((4000 * DN) / fs), k1 = Math.min(DN / 2 - 1, Math.round((14000 * DN) / fs));
+  let r = 0, n = 0;
+  for (let k = k0; k <= k1; k++) { r += 20 * Math.log10((p10[k] + 1e-9) / (p50[k] + 1e-9)); n++; }
+  const lo = Math.round((5000 * DN) / fs), hi = Math.round((12000 * DN) / fs);
+  const tilt = 20 * Math.log10((p10[hi] + 1e-9) / (p10[lo] + 1e-9));
+  return { ratioDb: r / n, tiltDb: tilt };
+}
+function denoise(c, fs, prof) {
+  const n = c.length, out = new Float32Array(n), norm = new Float32Array(n);
+  const re = new Float32Array(DN), im = new Float32Array(DN);
+  const prev = new Float32Array(DN / 2).fill(1);
+  const kLo = Math.round((1000 * DN) / fs), kHi = Math.round((2000 * DN) / fs);
+  for (let s = 0; s + DN <= n; s += DH) {
+    for (let i = 0; i < DN; i++) { re[i] = c[s + i] * DWIN[i]; im[i] = 0; }
+    fftMag(re, im);
+    for (let k = 0; k <= DN / 2; k++) {
+      const kk = Math.min(k, DN / 2 - 1);
+      const mag = Math.hypot(re[k], im[k]) + 1e-12;
+      // music below ~1 kHz masks hiss; fade the effect in between 1 and 2 kHz
+      const w = kk <= kLo ? 0 : kk >= kHi ? 1 : (kk - kLo) / (kHi - kLo);
+      // hiss magnitudes are Rayleigh distributed: mean power = 9.49 x (10th percentile)^2
+      const np = 9.49 * prof.p10[kk] * prof.p10[kk];
+      let g = Math.sqrt(Math.max(0.01, 1 - (1.3 * np) / (mag * mag)));
+      g = g < prev[kk] ? g : 0.7 * prev[kk] + 0.3 * g; // slow release avoids "musical noise"
+      prev[kk] = g;
+      const G = 1 - w * (1 - g);
+      re[k] *= G; im[k] *= G;
+      if (k > 0 && k < DN / 2) { re[DN - k] *= G; im[DN - k] *= G; }
+    }
+    // inverse FFT via conjugate trick
+    for (let i = 0; i < DN; i++) im[i] = -im[i];
+    fftMag(re, im);
+    for (let i = 0; i < DN; i++) { out[s + i] += (re[i] / DN) * DWIN[i]; norm[s + i] += DWIN[i] * DWIN[i]; }
+  }
+  for (let i = 0; i < n; i++) out[i] = norm[i] > 1e-3 ? out[i] / norm[i] : c[i];
+  return out;
+}
+
+// ---------------------------------------------------------------- 1/3-octave tonal balance
+const THIRD = Array.from({ length: 27 }, (_, i) => 1000 * 2 ** ((i - 15) / 3)).filter((f) => f >= 38 && f <= 16500);
+function refAt(f) {
+  const x = Math.log2(f);
+  const xs = OCT.map((o) => Math.log2(o));
+  if (x <= xs[0]) return OCT_REF[0];
+  if (x >= xs[xs.length - 1]) return OCT_REF[OCT_REF.length - 1];
+  let i = 0; while (x > xs[i + 1]) i++;
+  const k = (x - xs[i]) / (xs[i + 1] - xs[i]);
+  return OCT_REF[i] * (1 - k) + OCT_REF[i + 1] * k;
+}
+function thirdOctDev(mono, fs) {
+  const N = 8192, hop = 8192, win = new Float32Array(N).map((_, i) => 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (N - 1)));
+  const pw = new Float64Array(N / 2), re = new Float32Array(N), im = new Float32Array(N);
+  let rmsAll = 0; for (let i = 0; i < mono.length; i += 64) rmsAll += mono[i] * mono[i]; rmsAll = Math.sqrt(rmsAll / (mono.length / 64));
+  for (let s = 0; s + N <= mono.length; s += hop) {
+    let e = 0; for (let i = 0; i < N; i++) { const v = mono[s + i]; re[i] = v * win[i]; im[i] = 0; e += v * v; }
+    if (Math.sqrt(e / N) < rmsAll * 0.25) continue;
+    fftMag(re, im);
+    for (let k = 0; k < N / 2; k++) pw[k] += re[k] * re[k] + im[k] * im[k];
+  }
+  // energy per octave (same scale as the octave reference)
+  const lv = THIRD.map((fc) => {
+    let s2 = 0;
+    for (let k = Math.max(1, Math.round((fc / 2 ** (1 / 6) * N) / fs)); k <= Math.min(N / 2 - 1, Math.round((fc * 2 ** (1 / 6) * N) / fs)); k++) s2 += pw[k];
+    return pdb(s2 * 3);
+  });
+  const i1k = THIRD.findIndex((f) => Math.abs(f - 1000) < 1);
+  const dev = lv.map((v, i) => v - lv[i1k] - refAt(THIRD[i]));
+  // remove overall level using the 250 Hz - 4 kHz region
+  const mid = dev.filter((_, i) => THIRD[i] >= 250 && THIRD[i] <= 4000);
+  const off = mid.reduce((a, b) => a + b, 0) / mid.length;
+  return dev.map((v) => v - off);
+}
+
 // ---------------------------------------------------------------- analysis
 export function analyseQuality(chs, fs, vocals = []) {
   const n = chs[0].length;
@@ -211,13 +404,9 @@ export function analyseQuality(chs, fs, vocals = []) {
   const samplePeak = Math.max(...peaks.map((p) => p.samplePeak));
   const tp = Math.max(...peaks.map((p) => p.truePeak));
   // clipping: 3+ consecutive samples at the same near-full-scale value
+  // clipping: flat tops (2+ equal samples) at the file's own ceiling, wherever that ceiling is
   let clips = 0;
-  for (const c of chs) {
-    let run = 0;
-    for (let i = 1; i < n; i++) {
-      if (Math.abs(c[i]) > 0.989 && Math.abs(c[i] - c[i - 1]) < 1e-4) { run++; if (run === 2) clips++; } else run = 0;
-    }
-  }
+  for (const c of chs) clips += findClips(c).length;
   let dc = 0; for (let i = 0; i < n; i++) dc += mono[i]; dc /= n;
   let ss = 0; for (let i = 0; i < n; i++) ss += mono[i] * mono[i];
   const rms = Math.sqrt(ss / n);
@@ -274,6 +463,7 @@ export function analyseQuality(chs, fs, vocals = []) {
     corr, corrLow, sideDb: side, spectrum: spec.rel, rumbleDb, noiseFloor, leadSilence: (lead * W) / fs, trailSilence: (trail * W) / fs,
     sibilanceDb: sib,
     tonal: tonal(spec.oct),
+    hiss: hissLevel(mono, fs),
   };
 }
 
@@ -281,7 +471,8 @@ export function analyseQuality(chs, fs, vocals = []) {
 export function diagnose(m, target = -14) {
   const issues = [];
   const add = (id, level, value, fix) => issues.push({ id, level, value, fix });
-  if (m.clips > 0) add('clipping', 'bad', m.clips, 'limiter');
+  if (m.clips > 20) add('clipping', 'bad', m.clips, 'declip');
+  if (m.hiss && m.hiss.ratioDb > -20 && m.hiss.tiltDb > -12) add('hiss', m.hiss.ratioDb > -12 ? 'bad' : 'warn', m.hiss.ratioDb, 'denoise');
   if (m.truePeakDb > -1) add('truePeak', m.truePeakDb > 0 ? 'bad' : 'warn', m.truePeakDb, 'limiter');
   if (m.lufs < target - 3) add('quiet', 'warn', m.lufs, 'loudness');
   if (m.lufs > -7) add('loud', 'warn', m.lufs, 'loudness');
@@ -330,6 +521,9 @@ export function diagnose(m, target = -14) {
     punch: m.crest < 10,
     width: m.channels > 1 && m.sideDb < -16 && m.corr > 0.3,
     exciter: dull,
+    declip: m.clips > 20,
+    denoise: !!(m.hiss && m.hiss.ratioDb > -20 && m.hiss.tiltDb > -12),
+    bwe: td[8] < -6 || td[9] < -9,
     exciterAmount: dull ? clamp(-Math.min(td[8], td[9] / 2) / 6, 0.35, 1.6) : 0,
     pseudoStereo: m.channels > 1 && m.sideDb < -24,
   };
@@ -352,6 +546,20 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
   const stereo = out.length > 1;
   const stages = [];
   const n = out[0].length;
+
+  // 0. repair: rebuild clipped peaks, then remove steady hiss
+  if (plan.declip) {
+    let rep = 0;
+    out = out.map((c) => { const r = declip(c); rep += r.repaired; return r.y; });
+    if (rep) stages.push('declip');
+  }
+  if (plan.denoise) {
+    const mono0 = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a += c[i]; mono0[i] = a / out.length; }
+    const prof = noiseProfile(mono0, 2);
+    out = out.map((c) => denoise(c, fs, prof));
+    stages.push('denoise');
+  }
+  onProgress(0.04);
 
   // 1. DC + rumble: 4th-order high-pass
   out = out.map((c) => lr4(c, 'hp', fs, plan.highpass));
@@ -462,6 +670,20 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
   }
   onProgress(0.64);
 
+  // 8b. bandwidth extension: when the top was cut off, rebuild it from harmonics of 1.5-6 kHz
+  if (plan.bwe) {
+    out = out.map((c) => {
+      const band = lr4(lr4(c, 'hp', fs, 1500), 'lp', fs, 6000);
+      const rect = new Float32Array(n);
+      let mean = 0; for (let i = 0; i < n; i++) mean += Math.abs(band[i]); mean /= n;
+      for (let i = 0; i < n; i++) rect[i] = Math.abs(band[i]) - mean + Math.tanh(band[i] * 6) / 6;
+      const hi = lr4(lr4(rect, 'hp', fs, 5000), 'hp', fs, 5000);
+      const y = new Float32Array(n); for (let i = 0; i < n; i++) y[i] = c[i] + hi[i] * 0.9;
+      return y;
+    });
+    stages.push('bwe');
+  }
+
   // 9. de-esser
   if (plan.deess) {
     const k1 = coeffs('hp', fs, 5000), k2 = coeffs('lp', fs, 9000);
@@ -476,12 +698,27 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
   }
   onProgress(0.7);
 
-  // 9b. closed loop: measure the tonal balance again and correct what is left (2 passes)
+  // 9b. closed loop on 1/3-octave bands: measure, correct what is left, measure again (3 passes)
   if (plan.eq.length || plan.multiband) {
+    const hiCap = plan.exciter || plan.bwe ? 6 : 2.5;
+    for (let pass = 0; pass < 3; pass++) {
+      const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a += c[i]; mono[i] = a / out.length; }
+      const dev = thirdOctDev(mono, fs);
+      // smooth across neighbours so we never carve narrow notches
+      const sm = dev.map((v, i) => 0.25 * (dev[i - 1] ?? v) + 0.5 * v + 0.25 * (dev[i + 1] ?? v));
+      const fix = THIRD.map((f, i) => ({ f, gain: clamp(-Math.sign(sm[i]) * Math.max(0, Math.abs(sm[i]) - 0.5) * 0.85, -3, f >= 6000 ? hiCap : 2.5) }))
+        .filter((e) => Math.abs(e.gain) >= 0.2);
+      if (!fix.length) break;
+      for (const e of fix) {
+        const k = e.f < 45 ? coeffs('lshelf', fs, 50, 0.7071, e.gain) : e.f > 14000 ? coeffs('hshelf', fs, 13000, 0.7071, e.gain) : coeffs('peak', fs, e.f, 2.2, e.gain);
+        out = out.map((c) => filt(c, k));
+      }
+    }
+    // last pass on the octave bands the score is measured on
     for (let pass = 0; pass < 2; pass++) {
       const mono = new Float32Array(n); for (let i = 0; i < n; i++) { let a = 0; for (const c of out) a += c[i]; mono[i] = a / out.length; }
       const td = tonal(spectrum(mono, fs).oct).dev;
-      const fix = OCT.map((f, i) => ({ f, gain: clamp(-Math.sign(td[i]) * Math.max(0, Math.abs(td[i]) - 0.8) * 0.75, -3, i >= 8 && plan.exciter ? 4 : 2.5) })).filter((e) => Math.abs(e.gain) >= 0.25);
+      const fix = OCT.map((f, i) => ({ f, gain: clamp(-td[i] * 0.85, -2, f >= 6000 ? hiCap : 2) })).filter((e) => Math.abs(e.gain) >= 0.2);
       if (!fix.length) break;
       for (const e of fix) {
         const k = e.f < 40 ? coeffs('lshelf', fs, 45, 0.7071, e.gain) : e.f > 12000 ? coeffs('hshelf', fs, 12000, 0.7071, e.gain) : coeffs('peak', fs, e.f, 1.0, e.gain);
@@ -500,9 +737,11 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
     if (club) {
       // soft clipper shaves the sharpest peaks before the limiter, so loud masters keep their punch
       const t = 10 ** (-3 / 20);
-      for (const c of res) for (let i = 0; i < n; i++) { const v = c[i], a = Math.abs(v); if (a > t) c[i] = Math.sign(v) * (t + (1 - t) * Math.tanh((a - t) / (1 - t))); }
+      // rational knee: the curve keeps rising (never flattens), so it rounds peaks instead of clipping them
+      const kn = 0.35;
+      for (const c of res) for (let i = 0; i < n; i++) { const v = c[i], a = Math.abs(v); if (a > t) { const o = a - t; c[i] = Math.sign(v) * (t + o / (1 + o / kn)); } }
     }
-    const ceil = 10 ** (-1.2 / 20);
+    const ceil = 10 ** (-1.02 / 20);
     const peak = new Float32Array(n);
     const L = OS_TAPS[0].length, h = L >> 1;
     for (const c of res) {
@@ -514,21 +753,35 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
         if (a > peak[i]) peak[i] = a;
       }
     }
-    const look = Math.round(0.004 * fs), need = new Float32Array(n), dq = [];
+    // look-ahead limiter without hard clipping:
+    //   r = gain each sample needs; m = minimum of r over a window; g = average of m over the same
+    //   window. Every value averaged comes from a window that contains sample i, so g[i] <= r[i]
+    //   (the peak never exceeds the ceiling) while the gain curve stays smooth (no flat tops).
+    const LW = Math.max(4, Math.round(0.003 * fs)), h2 = LW >> 1;
+    const r = new Float32Array(n); for (let i = 0; i < n; i++) r[i] = peak[i] > ceil ? ceil / peak[i] : 1;
+    const m = new Float32Array(n), dq = [];
     let head = 0;
-    for (let i = n - 1; i >= 0; i--) {
-      while (dq.length > head && peak[dq[dq.length - 1]] <= peak[i]) dq.pop();
-      dq.push(i);
-      while (dq[head] > i + look) head++;
-      const m = peak[dq[head]];
-      need[i] = m > ceil ? ceil / m : 1;
+    for (let i = 0; i < n + h2; i++) {
+      if (i < n) { while (dq.length > head && r[dq[dq.length - 1]] >= r[i]) dq.pop(); dq.push(i); }
+      const c = i - h2;
+      if (c < 0) continue;
+      while (dq[head] < c - h2) head++;
+      m[c] = r[dq[head]];
     }
-    const rl = Math.exp(-1 / (0.08 * fs)), at = Math.exp(-1 / (0.0015 * fs));
-    let g = 1;
+    const g = new Float32Array(n);
+    let acc = 0;
+    for (let i = 0; i < n + h2; i++) {
+      if (i < n) acc += m[i];
+      if (i - LW >= 0) acc -= m[i - LW];
+      const c = i - h2;
+      if (c >= 0 && c < n) g[c] = acc / Math.min(LW, i + 1);
+    }
+    // slow release, but never above what the window allows
+    const rl = Math.exp(-1 / (0.08 * fs));
+    let gs = 1;
     for (let i = 0; i < n; i++) {
-      g = need[i] < g ? Math.max(need[i], at * g + (1 - at) * need[i]) : rl * g + (1 - rl) * need[i];
-      if (peak[i] * g > ceil) g = Math.min(g, ceil / peak[i]);
-      for (const c of res) c[i] *= g;
+      gs = g[i] < gs ? g[i] : Math.min(g[i], rl * gs + (1 - rl));
+      for (const c of res) c[i] *= gs;
     }
     return res;
   };
@@ -537,7 +790,13 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
   let res = limited(out, gDb);
   onProgress(0.85);
   const got = loudness(res, fs).I;
-  if (Math.abs(got - plan.target) > 0.25) { gDb += clamp(plan.target - got, -3, 3); res = limited(out, gDb); }
+  // up to two more passes until the loudness lands within 0.1 LU of the target
+  let lastGot = got;
+  for (let pass = 0; pass < 2 && Math.abs(lastGot - plan.target) > 0.1; pass++) {
+    gDb += clamp(plan.target - lastGot, -3, 3);
+    res = limited(out, gDb);
+    lastGot = loudness(res, fs).I;
+  }
   out = res;
   stages.push('loudness');
   onProgress(0.97);
@@ -546,3 +805,5 @@ export function enhance(chs, fs, plan, onProgress = () => {}) {
 }
 
 export { BANDS };
+// exposed for the measurement scripts
+export const _dsp = { declip, denoise, noiseProfile };

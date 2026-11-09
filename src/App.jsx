@@ -67,6 +67,8 @@ export default function App() {
   const [deepStatus, setDeepStatus] = useState({ status: 'idle', p: 0 });
   const [algoOpen, setAlgoOpen] = useState(false);
   const [oneOpen, setOneOpen] = useState(false);
+  const [folderOpen, setFolderOpenRaw] = useState(() => { try { return localStorage.getItem('viz-folder') === '1'; } catch { return false; } });
+  const setFolderOpen = (f) => setFolderOpenRaw((v) => { const nv = typeof f === 'function' ? f(v) : f; try { localStorage.setItem('viz-folder', nv ? '1' : '0'); } catch { /* ignore */ } return nv; });
   const [quality, setQuality] = useState({ status: 'idle' });
   const [qTarget, setQTarget] = useState(-14);
   const [useEnhanced, setUseEnhancedRaw] = useState(false);
@@ -186,6 +188,26 @@ export default function App() {
       .then((result) => setQuality({ status: 'done', result }))
       .catch((e) => setQuality({ status: 'error', msg: e.message }));
   }
+  // main-panel "Yaxshilangan": check + improve in one go when nothing has been prepared yet
+  async function pickEnhanced() {
+    if (!audio) return;
+    if (quality.enhanced) { setUseEnhanced(true); return; }
+    try {
+      let result = quality.result;
+      if (!result) {
+        setQuality({ status: 'running' });
+        result = await checkQuality(audio.buffer, audio.analysis.deep?.vocals || [], qTarget);
+        setQuality({ status: 'done', result });
+      }
+      setQuality((q) => ({ ...q, status: 'done', result, enhancing: true, p: 0 }));
+      const r = await improveQuality(audio.buffer, { ...result.plan, target: qTarget }, audio.analysis.deep?.vocals || [], (p) => setQuality((q) => ({ ...q, p })));
+      setQuality((q) => ({ ...q, enhancing: false, enhanced: { ...r, url: toWavUrl(r.buffer) } }));
+      setUseEnhanced(true);
+    } catch (e) {
+      setQuality((q) => ({ ...q, enhancing: false, status: 'error', msg: e.message }));
+    }
+  }
+
   function runImprove() {
     if (!audio || !quality.result) return;
     setQuality((q) => ({ ...q, enhancing: true, p: 0 }));
@@ -300,6 +322,20 @@ export default function App() {
             <strong>{audio ? audio.name : T.chooseAudio}</strong>
             <span>{audio ? `${fmtTime(dur)} · ${T.bpm} ${audio.analysis.deep?.bpm ?? audio.analysis.bpm} BPM · ${audio.analysis.beats.length} ${T.beats}` : T.dropHint}</span>
           </label>
+          {audio && (
+            <div className="ab-main">
+              <span className="sub">{T.soundVersion}</span>
+              <div className="seg">
+                <button className={!useEnhanced ? 'on' : ''} onClick={() => setUseEnhanced(false)}>{T.original}</button>
+                <button className={useEnhanced && quality.enhanced ? 'on' : ''} onClick={pickEnhanced} disabled={!!quality.enhancing || quality.status === 'running'}>
+                  {T.enhanced}{quality.enhanced ? ` · ${quality.result?.score ?? ''}→${quality.enhanced.score}` : ''}
+                </button>
+              </div>
+              {(quality.enhancing || quality.status === 'running') && (
+                <div className="ab-progress"><div className="bar"><div style={{ width: `${Math.round((quality.p || 0) * 100)}%` }} /></div><small>{quality.status === 'running' ? T.qualityRunning : `${T.improving} ${Math.round((quality.p || 0) * 100)}%`}</small></div>
+              )}
+            </div>
+          )}
           <button id="algo-btn" className="algo-btn" onClick={() => setAlgoOpen(true)} disabled={!audio}>
             <b>{T.algo}</b>
             <small>{deepStatus.status === 'running' ? `${T.algoRunning} ${Math.round(deepStatus.p * 100)}%`
@@ -314,16 +350,36 @@ export default function App() {
         <Section title={T.template}>
           <button className={`tpl tpl-none ${s.template === 'none' ? 'on' : ''}`} onClick={() => set('template', 'none')}>{T.tplNone}</button>
           <p className="hint">{T.tplOffHint}</p>
-          {CATEGORIES.map((c) => (
-            <div key={c.id} className="cat">
-              <div className="cat-name">{T.cat[c.id]}</div>
-              <div className="tpl-grid">
-                {c.items.map((k) => (
-                  <button key={k} className={`tpl ${s.template === k ? 'on' : ''}`} onClick={() => { if (k === 'one' && s.template !== 'one' && !s.layers?.length) buildOne(); else set('template', s.template === k ? 'none' : k); }} title={s.template === k ? T.tplOffHint : ''}>{T.tpl[k]}</button>
-                ))}
-              </div>
-            </div>
-          ))}
+          {(() => {
+            const pickTpl = (k) => { if (k === 'one' && s.template !== 'one' && !s.layers?.length) buildOne(); else set('template', s.template === k ? 'none' : k); };
+            const tplBtn = (k) => (
+              <button key={k} className={`tpl ${s.template === k ? 'on' : ''}`} onClick={() => pickTpl(k)} title={s.template === k ? T.tplOffHint : ''}>{T.tpl[k]}</button>
+            );
+            const base = CATEGORIES.find((c) => c.id === 'base');
+            const rest = CATEGORIES.filter((c) => c.id !== 'base');
+            const inFolder = rest.some((c) => c.items.includes(s.template));
+            const count = rest.reduce((n, c) => n + c.items.length, 0);
+            return (
+              <>
+                <div className="tpl-grid">{base.items.map(tplBtn)}</div>
+                <button className={`folder ${folderOpen ? 'open' : ''} ${inFolder ? 'has-on' : ''}`} onClick={() => setFolderOpen((v) => !v)} aria-expanded={folderOpen}>
+                  <span className="folder-ico" aria-hidden="true">{folderOpen ? '▾' : '▸'}</span>
+                  <span>{T.tplFolder} ({count})</span>
+                  {inFolder && !folderOpen && <em>{T.tpl[s.template]}</em>}
+                </button>
+                {folderOpen && (
+                  <div className="folder-body">
+                    {rest.map((c) => (
+                      <div key={c.id} className="cat">
+                        <div className="cat-name">{T.cat[c.id]}</div>
+                        <div className="tpl-grid">{c.items.map(tplBtn)}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            );
+          })()}
           {s.template === 'one' && (
             <div className="one-inline">
               <div className="q-actions">

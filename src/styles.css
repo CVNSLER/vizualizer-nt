@@ -178,3 +178,14 @@ input.txt { width: 100%; margin-bottom: 8px; }
 
 .crash { max-width: 760px; margin: 40px auto; padding: 0 16px; color: var(--text); }
 .crash pre { white-space: pre-wrap; background: #1a0f12; border: 1px solid var(--err); border-radius: 8px; padding: 12px; color: #ffb4b4; font-size: 12px; }
+
+.folder { width: 100%; margin: 10px 0 6px; display: flex; align-items: center; gap: 8px; text-align: left; font-weight: 600; }
+.folder.has-on { border-color: var(--accent); }
+.folder em { margin-left: auto; font-style: normal; font-weight: 400; color: var(--accent2); font-size: 12px; }
+.folder-ico { width: 14px; color: var(--muted); }
+.folder-body { border-left: 2px solid var(--line); padding-left: 10px; margin-bottom: 6px; }
+.ab-main { margin-top: 10px; }
+.ab-main .sub { margin: 0 0 6px; }
+.ab-main .seg { margin-bottom: 6px; }
+.ab-progress { display: flex; flex-direction: column; gap: 4px; }
+.ab-progress small { color: var(--muted); }
