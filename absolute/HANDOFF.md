@@ -1,5 +1,7 @@
 # ABSOLUTE («Пустой») — yo'riqnoma keyingi sessiya uchun
 
+> ⚠️ **DIQQAT (2026-11-16):** bu GitHub nusxasi ESKIRGAN. Asosiy versiya muallifning kompyuterida: `C:\Users\moora\OneDrive\Desktop\Dorum\absolute\`. U yerda 13–14-boblar qayta yozilgan. Bu papkadagi fayllarni o'sha versiyaning ustiga yozmang. Avval muallifdan eng yangi fayllarni so'rang.
+
 Bu papka dastur kodiga aloqador emas. Bu muallifning romani: dark fantasy, rus tilida.
 Muallif bilan **o'zbek tilida** gaplashiladi. Kitob matni esa **rus tilida** yoziladi.
 
